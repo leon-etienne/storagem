@@ -437,6 +437,98 @@ def make_thumbnail_path(row: pd.Series) -> str:
     return f"{BASE_THUMB_PATH}/unknown.jpg"
 
 
+# ---------- SHELF NUMBER HANDLING ----------
+
+def parse_shelf_numbers(shelf_value: Any) -> List[str]:
+    """
+    Parse shelfNo value and return list of individual shelf numbers.
+    Handles formats like: "3", "3;4", "07", "3;4;5", etc.
+    Normalizes shelf numbers by removing leading zeros (e.g., "07" -> "7").
+    """
+    if pd.isna(shelf_value) or shelf_value is None:
+        return []
+    
+    shelf_str = str(shelf_value).strip()
+    if not shelf_str:
+        return []
+    
+    # Split by semicolon and clean each part
+    shelf_numbers = []
+    for part in shelf_str.split(";"):
+        part = part.strip()
+        if part:
+            # Normalize by converting to int (removes leading zeros) then back to string
+            try:
+                # Try to convert to int to remove leading zeros
+                normalized = str(int(part))
+                shelf_numbers.append(normalized)
+            except ValueError:
+                # If it's not a number, keep as-is (e.g., "A", "B1", etc.)
+                shelf_numbers.append(part)
+    
+    return shelf_numbers
+
+
+def duplicate_artworks_by_shelf(artworks: pd.DataFrame) -> pd.DataFrame:
+    """
+    Duplicate artwork entries when shelfNo contains multiple shelf numbers (e.g., "3;4").
+    Each duplicate will have a single shelfNo value.
+    """
+    if "shelfNo" not in artworks.columns:
+        return artworks
+    
+    # Parse shelf numbers for each row
+    artworks["shelf_list"] = artworks["shelfNo"].apply(parse_shelf_numbers)
+    
+    # Count how many rows will be created
+    shelf_lengths = artworks["shelf_list"].apply(len)
+    total_duplicates = shelf_lengths.sum()
+    single_shelf_count = (shelf_lengths == 1).sum()
+    multi_shelf_count = (shelf_lengths > 1).sum()
+    no_shelf_count = (shelf_lengths == 0).sum()
+    
+    print(f"\nShelf number processing:")
+    print(f"  - Artworks with single shelf: {single_shelf_count}")
+    print(f"  - Artworks with multiple shelves: {multi_shelf_count}")
+    print(f"  - Artworks with no shelf: {no_shelf_count}")
+    print(f"  - Total rows before: {len(artworks)}")
+    print(f"  - Total rows after: {total_duplicates + no_shelf_count}")
+    
+    # Explode the shelf_list to create duplicate rows
+    # First, handle rows with no shelf numbers (set to empty string or keep original)
+    artworks_no_shelf = artworks[artworks["shelf_list"].apply(len) == 0].copy()
+    if len(artworks_no_shelf) > 0:
+        artworks_no_shelf["shelfNo"] = ""
+    
+    # Handle rows with shelf numbers
+    artworks_with_shelf = artworks[artworks["shelf_list"].apply(len) > 0].copy()
+    
+    if len(artworks_with_shelf) > 0:
+        # Explode to create one row per shelf number
+        artworks_exploded = artworks_with_shelf.explode("shelf_list", ignore_index=False)
+        artworks_exploded["shelfNo"] = artworks_exploded["shelf_list"]
+        
+        # Drop the temporary shelf_list column
+        artworks_exploded = artworks_exploded.drop(columns=["shelf_list"])
+        
+        # Combine with artworks that have no shelf numbers
+        if len(artworks_no_shelf) > 0:
+            artworks_no_shelf = artworks_no_shelf.drop(columns=["shelf_list"])
+            result = pd.concat([artworks_exploded, artworks_no_shelf], ignore_index=True)
+        else:
+            result = artworks_exploded.reset_index(drop=True)
+    else:
+        # No artworks with shelf numbers
+        if len(artworks_no_shelf) > 0:
+            artworks_no_shelf = artworks_no_shelf.drop(columns=["shelf_list"])
+            result = artworks_no_shelf.reset_index(drop=True)
+        else:
+            result = artworks.reset_index(drop=True)
+            result = result.drop(columns=["shelf_list"])
+    
+    return result
+
+
 # ---------- MAIN EXECUTION ----------
 
 if __name__ == "__main__":
@@ -451,6 +543,21 @@ if __name__ == "__main__":
     
     # Add thumbnail paths
     artworks["thumbnail"] = artworks.apply(make_thumbnail_path, axis=1)
+    
+    # Sanitize and duplicate artworks by shelf number
+    artworks = duplicate_artworks_by_shelf(artworks)
+    
+    # Convert shelfNo to string format (remove .0 from floats, keep as clean numbers)
+    if "shelfNo" in artworks.columns:
+        def format_shelf_number(value):
+            if pd.isna(value) or value == "":
+                return ""
+            # Convert to int then string to remove leading zeros and .0
+            try:
+                return str(int(float(value)))
+            except (ValueError, TypeError):
+                return str(value) if value else ""
+        artworks["shelfNo"] = artworks["shelfNo"].apply(format_shelf_number)
     
     # Clean up list fields (convert arrays to comma-separated strings)
     list_fields = ["rental", "status", "media"]

@@ -91,13 +91,37 @@ def prepare_dataframe(df_raw: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
 
 
 def dataframe_to_documents(df: pd.DataFrame, cols_to_index: List[str]) -> List[str]:
+    """
+    Convert dataframe rows to searchable text documents.
+    Optimized order: artist (most important for identification), title, description, year.
+    """
     docs = []
     for _, row in df.iterrows():
         parts = []
+        
+        # Order columns for better search relevance: artist first, then title, description, year
+        ordered_cols = []
+        priority_cols = ["artist", "title", "description", "year"]
+        
+        # Add priority columns first if they exist
+        for col in priority_cols:
+            if col in cols_to_index:
+                ordered_cols.append(col)
+        
+        # Add any remaining columns
         for col in cols_to_index:
+            if col not in ordered_cols:
+                ordered_cols.append(col)
+        
+        # Build document parts
+        for col in ordered_cols:
             value = row.get(col)
-            if pd.notna(value):
-                parts.append(f"{col}: {value}")
+            if pd.notna(value) and str(value).strip():
+                # Clean up the value - remove extra whitespace
+                clean_value = str(value).strip()
+                parts.append(f"{col}: {clean_value}")
+        
+        # Add shelf and orig_id at the end
         parts.append(f"shelf: {row['shelf_single']}")
         parts.append(f"orig_id: {row['orig_id']}")
         docs.append(". ".join(parts))
@@ -191,7 +215,7 @@ def build_artifacts(
 
 def main():
     parser = argparse.ArgumentParser(description="Build FAISS index artifacts for artwork search.")
-    parser.add_argument("--csv", default="artworks_with_thumbnails.csv", help="Path to the CSV file with artworks data.")
+    parser.add_argument("--csv", default="artworks_with_thumbnails_ting.csv", help="Path to the CSV file with artworks data.")
     parser.add_argument("--out", default="artifacts", help="Directory where the FAISS index and metadata will be stored.")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for embedding generation.")
     parser.add_argument("--force", action="store_true", help="Overwrite existing artifacts if present.")
