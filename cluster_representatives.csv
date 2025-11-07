@@ -1,0 +1,31 @@
+cluster,index,id,title,artist,artwork_no,shelf_no,rank,num_artworks_in_cluster,distance_to_centroid
+0,336,02505d00-f32a-46e7-abd3-5a29c2dae356,ohne Titel,Vögele Lukas,,,1,132,0.3442820608615875
+0,348,7ff7a0cf-e585-4fd9-931f-93722d94fa46,o. T. ,Lucie Gorzolka,,,2,132,0.349092036485672
+0,297,44dd59f5-1cd2-4dce-a937-ebd373f705dc,Kamm,Andreas Steinbrecher,,,3,132,0.35167431831359863
+0,280,a7c96d2b-8ee8-4f1f-b4bd-64d3f95b0d72,o. T. ,Lucie Gorzolka,,,4,132,0.3567107617855072
+0,352,f97119ca-e3d5-4366-b761-54184888a7c7,o. T. ,Lucie Gorzolka,,,5,132,0.3571409583091736
+1,138,a73cb3c6-41d9-4f54-a9f5-019ca59d5e12,Stufen,Anna Francesca Fuhrich,,5.0,1,78,0.33740928769111633
+1,200,90d10f30-a0f7-4247-8549-702870f146ce,o. T. ,Lucie Gorzolka,,1.0,2,78,0.34831804037094116
+1,94,1837a48f-99e4-48eb-b261-d35032fdfce2,o. T. ,Lucie Gorzolka,,1.0,3,78,0.3525758981704712
+1,195,5de1d0db-f4a4-4eb6-9e52-26c2950a3113,untitled,Franziska Frings,,1.0,4,78,0.35360851883888245
+1,201,a5833d05-92ce-4aba-91b1-bd90a828bd9b,Platanen,Lucie Gorzolka,,1.0,5,78,0.35849320888519287
+2,53,5a134b0b-a37b-4211-9eeb-65e0392c7c7c,NO,Manuel Boden,,3.0,1,53,0.3742571175098419
+2,93,dbf18420-235c-4f66-91c4-01a28187d3b1,untitled,Franziska Frings,,3.0,2,53,0.3980199694633484
+2,92,3ba0c2b5-13fe-426d-9c51-94c38008b73c,untitled,Franziska Frings,,3.0,3,53,0.3992551267147064
+2,59,5ee3b139-ed05-4d89-b871-be56139e774c,o.T.,Manuel Boden,,3.0,4,53,0.4287329614162445
+2,52,0fb1084a-a880-4191-b095-84f5a2042ce4,Zucht,Paula Rinderle,,3.0,5,53,0.43442246317863464
+3,118,fd12f595-4efb-451a-a561-bfaa3aea0f06,o.T. ,Paulina Hoffmann,,4.0,1,25,0.34287455677986145
+3,135,5ce31962-ad3a-4d50-b9b6-e1f6d1af343f,untitled (Holzsicheln),Franziska Frings,,4.0,2,25,0.35865944623947144
+3,124,e3ac4ef1-4df3-495d-8daa-7c011563e054,o.T.,Manuel Boden,,4.0,3,25,0.35916271805763245
+3,134,c6ffb1e1-8472-42cc-b74b-f3e1da2151db,Semophor,Franziska Frings,,4.0,4,25,0.3984500765800476
+3,133,70da829b-d27b-4093-8c82-85bc91eda806,occme,Franziska Frings,,4.0,5,25,0.40880247950553894
+4,6,f2468398-e185-443c-98b7-5cec43dcf943,Unvorhergesehenes Ereignis,Andreas Steinbrecher,,7.0,1,88,0.36888837814331055
+4,219,a4b4fe73-b753-4a71-ae91-bd60e120fa11,ohne Titel,Konstantine Kakabadze,,2.0,2,88,0.3711150288581848
+4,15,f62d02a6-93ea-4141-bbc3-7432b7ae80b1,Haikal,Andreas Steinbrecher,,7.0,3,88,0.37965869903564453
+4,7,24d6107c-a41b-4a96-8980-1ab451859d98,Sem II,Andreas Steinbrecher,,7.0,4,88,0.38048774003982544
+4,34,26da73dc-8400-476f-a2b4-57dc8f8f2067,o.T.,Julian Westermann,,2.0,5,88,0.38863176107406616
+5,29,9daa608e-c806-4d93-99d9-b965b5733de6,o. T. (in fleeting memory),Emmélie Lempert,,8.0,1,10,0.40612494945526123
+5,155,248ed937-2446-459f-9c65-4d7fd5b6a933,Mein Wille geschehe,Tassilo Lantermann,,8.0,2,10,0.41090819239616394
+5,104,531b772a-6aa3-4b9f-9fb6-3c409a95a55f,Krippe ,Anna Francesca Fuhrich,,8.0,3,10,0.41249212622642517
+5,95,a3336096-105a-4019-82fe-d5d65b22981b,Gemeinschaftsdusche,Janis Löhrer,,8.0,4,10,0.45780158042907715
+5,156,bb3850e0-5073-4dba-a383-59b77050893a,Großer Kreis,Manuel Dück,,8.0,5,10,0.458670049905777
