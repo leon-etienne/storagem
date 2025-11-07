@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Artwork Search</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f7f7f8;
+        color: #111;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        background: #111;
+        color: #fff;
+        padding: 24px;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 28px;
+      }
+      main {
+        flex: 1;
+        display: flex;
+        justify-content: center;
+        padding: 32px 16px 64px;
+      }
+      .panel {
+        width: 100%;
+        max-width: 960px;
+        background: #fff;
+        border-radius: 16px;
+        padding: 32px;
+        box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12);
+      }
+      form {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 24px;
+      }
+      input[type="text"] {
+        width: 100%;
+        padding: 12px 16px;
+        border: 1px solid #d4d4d8;
+        border-radius: 8px;
+        font-size: 16px;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+      input[type="text"]:focus {
+        outline: none;
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+      }
+      button {
+        align-self: flex-start;
+        background: #111827;
+        color: #fff;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: background 0.2s ease, transform 0.2s ease;
+      }
+      button:hover {
+        background: #0f172a;
+        transform: translateY(-1px);
+      }
+      .status {
+        font-size: 14px;
+        color: #6b7280;
+      }
+      .error {
+        background: #fee2e2;
+        border: 1px solid #fca5a5;
+        color: #b91c1c;
+        padding: 12px 16px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 16px;
+      }
+      th, td {
+        border: 1px solid #e5e7eb;
+        padding: 10px 12px;
+        text-align: left;
+        font-size: 15px;
+      }
+      th {
+        background: #f3f4f6;
+        font-weight: 600;
+      }
+      tbody tr:nth-child(even) {
+        background: #f9fafb;
+      }
+      .results-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 24px;
+        margin-top: 24px;
+      }
+      .artwork-card {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        overflow: hidden;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+      .artwork-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+      }
+      .artwork-thumbnail {
+        width: 100%;
+        height: 200px;
+        object-fit: cover;
+        background: #f3f4f6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #9ca3af;
+        font-size: 14px;
+      }
+      .artwork-thumbnail img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .artwork-info {
+        padding: 16px;
+      }
+      .artwork-title {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 0 8px 0;
+        color: #111827;
+        line-height: 1.4;
+      }
+      .artwork-meta {
+        font-size: 14px;
+        color: #6b7280;
+        margin: 4px 0;
+      }
+      .artwork-meta strong {
+        color: #374151;
+        font-weight: 500;
+      }
+      .artwork-description {
+        font-size: 13px;
+        color: #6b7280;
+        margin-top: 12px;
+        line-height: 1.5;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .artwork-score {
+        font-size: 12px;
+        color: #9ca3af;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #f3f4f6;
+      }
+      footer {
+        padding: 16px;
+        text-align: center;
+        font-size: 14px;
+        color: #6b7280;
+      }
+      @media (max-width: 640px) {
+        header, footer {
+          text-align: center;
+        }
+        .panel {
+          padding: 24px 16px;
+          border-radius: 0;
+          box-shadow: none;
+        }
+        .results-grid {
+          grid-template-columns: 1fr;
+          gap: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Artwork Semantic Search</h1>
+    </header>
+    <main>
+      <div class="panel">
+        {% if error %}
+          <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="POST">
+          <label for="query">Search for artworks by title, description, artist, or year.</label>
+          <input
+            id="query"
+            type="text"
+            name="q"
+            placeholder="Try searching for 'Impressionist landscapes'"
+            value="{{ q|default('') }}"
+            autofocus
+            {% if error %}disabled{% endif %}
+          >
+          <button type="submit" {% if error %}disabled{% endif %}>Search</button>
+          <p class="status">Powered by FAISS and CLIP embeddings. Top 5 results shown.</p>
+        </form>
+
+        {% if results is not none %}
+          {% if results|length == 0 %}
+            <p class="status">No results found. Try a different query.</p>
+          {% else %}
+            <div class="results-grid">
+              {% for row in results %}
+                <div class="artwork-card">
+                  <div class="artwork-thumbnail">
+                    {% if row.get('thumbnail') %}
+                      <img src="{{ row.thumbnail }}" alt="{{ row.get('title', 'Artwork') }}" onerror="this.style.display='none'; this.parentElement.innerHTML='<span>No image available</span>';">
+                    {% else %}
+                      <span>No image available</span>
+                    {% endif %}
+                  </div>
+                  <div class="artwork-info">
+                    <h3 class="artwork-title">{{ row.get('title', 'Untitled') }}</h3>
+                    {% if row.get('artist') %}
+                      <div class="artwork-meta"><strong>Artist:</strong> {{ row.artist }}</div>
+                    {% endif %}
+                    {% if row.get('year') %}
+                      <div class="artwork-meta"><strong>Year:</strong> {{ row.year }}</div>
+                    {% endif %}
+                    {% if row.get('description') %}
+                      <div class="artwork-description">{{ row.description }}</div>
+                    {% endif %}
+                    <div class="artwork-score">Relevance: {{ '%.3f'|format(row.score) }}</div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endif %}
+      </div>
+    </main>
+    <footer>
+      <span>Need to refresh the index? Run <code>python build_faiss_index_ting.py --force</code>.</span>
+    </footer>
+  </body>
+</html>
+

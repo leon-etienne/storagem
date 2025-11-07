@@ -1,0 +1,18 @@
+{
+  "cols_to_index": [
+    "title",
+    "description",
+    "artist",
+    "year"
+  ],
+  "model_name": "openai/clip-vit-base-patch32",
+  "normalize_embeddings": true,
+  "add_instruction": false,
+  "ef_search": 64,
+  "hnsw_m": 32,
+  "metadata": {
+    "num_rows": 386,
+    "num_original": 382,
+    "num_shelves": 11
+  }
+}

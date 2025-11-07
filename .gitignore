@@ -1,1 +1,29 @@
 /production-export-2025-11-04t14-27-00-000z/*
+# Python general ignores
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+.env
+.venv
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Mac specific ignores
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Backup files
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+
