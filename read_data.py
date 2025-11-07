@@ -1,5 +1,6 @@
 # --- NDJSON Parser + Preview (all-in-one notebook) ---
 
+import ast
 import json
 from typing import Any, Dict, Iterable, Iterator, List, Optional, TextIO, Union
 import pandas as pd  # optional but useful for visualization
@@ -84,8 +85,246 @@ def preview_ndjson(path: str, n: Optional[int] = None) -> pd.DataFrame:
 path = "production-export-2025-11-04t14-27-00-000z/data.ndjson"
 df = preview_ndjson(path)  # loads ALL if n not given
 
+# ---------- RESOLVE ARTIST REFERENCES ----------
+# Create a mapping from artist ID to artist name
+artists_df = df[df["_type"] == "artist"].copy()
+artist_map = {}
+
+for _, artist_row in artists_df.iterrows():
+    artist_id = artist_row.get("_id", "")
+    if artist_id:
+        # Handle both "drafts.xxx" and regular IDs
+        artist_id_clean = artist_id.replace("drafts.", "")
+        
+        # Get artist name from name.fName and name.lName
+        fname = artist_row.get("name.fName", "")
+        lname = artist_row.get("name.lName", "")
+        
+        # Combine first and last name
+        if fname and lname:
+            full_name = f"{fname} {lname}".strip()
+        elif fname:
+            full_name = fname
+        elif lname:
+            full_name = lname
+        else:
+            full_name = None
+        
+        if full_name:
+            artist_map[artist_id] = full_name
+            artist_map[artist_id_clean] = full_name  # Also map without "drafts." prefix
+
+print(f"Loaded {len(artist_map)} artist names")
+
 # Filter artworks only
 artworks = df[df["_type"] == "artwork"].copy()
+
+# Resolve artist references to names
+def resolve_artist_name(row):
+    """Resolve artist._ref to actual artist name."""
+    artist_ref = row.get("artist._ref", "")
+    
+    # Handle NaN, None, or empty values
+    if pd.isna(artist_ref) or artist_ref is None or artist_ref == "":
+        return None
+    
+    # Convert to string if it's not already
+    artist_ref = str(artist_ref).strip()
+    if not artist_ref:
+        return None
+    
+    # Try direct lookup
+    if artist_ref in artist_map:
+        return artist_map[artist_ref]
+    
+    # Try with "drafts." prefix
+    if not artist_ref.startswith("drafts."):
+        drafts_ref = f"drafts.{artist_ref}"
+        if drafts_ref in artist_map:
+            return artist_map[drafts_ref]
+    
+    # Try without "drafts." prefix
+    clean_ref = artist_ref.replace("drafts.", "")
+    if clean_ref and clean_ref in artist_map:
+        return artist_map[clean_ref]
+    
+    return None
+
+# Add resolved artist names
+artworks["artist"] = artworks.apply(resolve_artist_name, axis=1)
+print(f"Resolved artist names for {artworks['artist'].notna().sum()} out of {len(artworks)} artworks")
+
+# ---------- CLEAN UP COMPLEX FIELDS ----------
+# Many fields are stored as string representations of Python lists/dicts
+# We need to extract actual text values from them
+
+def extract_text_from_complex(value):
+    """Extract text from complex structures (lists, dicts, or their string representations)."""
+    # Handle NaN/None - check for array-like first
+    try:
+        # Check if it's a numpy array or pandas Series
+        if hasattr(value, '__array__') or (hasattr(value, '__len__') and not isinstance(value, (str, dict, list, tuple))):
+            # Convert array-like to list for processing
+            try:
+                value = list(value) if len(value) > 0 else None
+            except (TypeError, ValueError):
+                pass
+    except (TypeError, ValueError, AttributeError):
+        pass
+    
+    # Now check for NaN/None properly
+    if value is None:
+        return None
+    
+    # Check for NaN - handle scalar values only (not arrays/lists)
+    try:
+        # Only use pd.isna for scalar values
+        # Strings are iterable but we want to check them, so handle separately
+        if isinstance(value, str):
+            # Strings are fine, continue
+            pass
+        elif isinstance(value, (list, tuple, dict)):
+            # Lists/tuples/dicts are fine, continue
+            pass
+        else:
+            # For other types, check if it's NaN
+            if pd.isna(value):
+                return None
+    except (TypeError, ValueError):
+        # If pd.isna fails, continue processing
+        pass
+    
+    # If it's already a simple string (not a string representation of a list/dict), return it
+    if isinstance(value, str):
+        # Check if it's a string representation of a list or dict
+        value_stripped = value.strip()
+        if (value_stripped.startswith('[') and value_stripped.endswith(']')) or \
+           (value_stripped.startswith('{') and value_stripped.endswith('}')):
+            # Try to parse it
+            try:
+                parsed = ast.literal_eval(value)
+                value = parsed
+            except (ValueError, SyntaxError):
+                # If parsing fails, return as is
+                return value
+    
+    # If it's a list/array, extract text from items
+    if isinstance(value, (list, tuple)):
+        texts = []
+        for item in value:
+            if isinstance(item, dict):
+                # Handle block/rich text structures
+                if "children" in item:
+                    # Extract text from children blocks
+                    for child in item.get("children", []):
+                        if isinstance(child, dict) and "text" in child:
+                            texts.append(str(child["text"]))
+                elif "value" in item:
+                    texts.append(str(item["value"]))
+                elif "text" in item:
+                    texts.append(str(item["text"]))
+            elif isinstance(item, str):
+                texts.append(item)
+        return " ".join(texts).strip() if texts else None
+    
+    # If it's a dict, try to extract text
+    if isinstance(value, dict):
+        if "children" in value:
+            texts = []
+            for child in value.get("children", []):
+                if isinstance(child, dict) and "text" in child:
+                    texts.append(str(child["text"]))
+            return " ".join(texts).strip() if texts else None
+        elif "value" in value:
+            return str(value["value"])
+        elif "text" in value:
+            return str(value["text"])
+    
+    # If it's a simple value, return as string
+    try:
+        return str(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+def clean_list_field(value):
+    """Convert list fields to readable strings."""
+    # Handle NaN/None - check for array-like first
+    try:
+        # Check if it's a numpy array or pandas Series
+        if hasattr(value, '__array__') or (hasattr(value, '__len__') and not isinstance(value, (str, dict, list, tuple))):
+            # Convert array-like to list for processing
+            try:
+                value = list(value) if len(value) > 0 else None
+            except (TypeError, ValueError):
+                pass
+    except (TypeError, ValueError, AttributeError):
+        pass
+    
+    # Now check for NaN/None properly
+    if value is None:
+        return None
+    
+    # Check for NaN - handle scalar values only (not arrays/lists)
+    try:
+        # Only use pd.isna for scalar values
+        if isinstance(value, str):
+            # Strings are fine, continue
+            pass
+        elif isinstance(value, (list, tuple, dict)):
+            # Lists/tuples/dicts are fine, continue
+            pass
+        else:
+            # For other types, check if it's NaN
+            if pd.isna(value):
+                return None
+    except (TypeError, ValueError):
+        # If pd.isna fails, continue processing
+        pass
+    
+    # If it's a string representation of a list, parse it
+    if isinstance(value, str):
+        value_stripped = value.strip()
+        if (value_stripped.startswith('[') and value_stripped.endswith(']')):
+            try:
+                parsed = ast.literal_eval(value)
+                value = parsed
+            except (ValueError, SyntaxError):
+                return value
+    
+    # If it's a list, join with commas
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value)
+    
+    # Return as string if it's a simple value
+    try:
+        return str(value) if value else None
+    except (TypeError, ValueError):
+        return None
+
+# Clean up description field (required for indexing)
+if "description" in artworks.columns:
+    artworks["description"] = artworks["description"].apply(extract_text_from_complex)
+    print(f"Cleaned description field: {artworks['description'].notna().sum()} artworks have descriptions")
+
+# Clean up other text fields that might have complex structures
+text_fields = ["addition", "internalNote", "shortBio"]
+cleaned_text_fields = []
+for field in text_fields:
+    if field in artworks.columns:
+        artworks[field] = artworks[field].apply(extract_text_from_complex)
+        cleaned_text_fields.append(field)
+if cleaned_text_fields:
+    print(f"Cleaned text fields: {', '.join(cleaned_text_fields)}")
+
+# Clean up list fields (convert to readable comma-separated strings)
+list_fields = ["rental", "handling.status", "status", "media"]
+cleaned_list_fields = []
+for field in list_fields:
+    if field in artworks.columns:
+        artworks[field] = artworks[field].apply(clean_list_field)
+        cleaned_list_fields.append(field)
+if cleaned_list_fields:
+    print(f"Cleaned list fields: {', '.join(cleaned_list_fields)}")
 
 # ---------- ADD THUMBNAIL PATH FIELD ----------
 
@@ -273,13 +512,18 @@ artworks["thumbnail"] = artworks.apply(make_thumbnail_path, axis=1)
 required_fields = ["title", "description", "artist", "year"]
 missing_fields = [f for f in required_fields if f not in artworks.columns]
 if missing_fields:
-    print(f"WARNING: Missing fields in CSV: {missing_fields}")
+    print(f"\nWARNING: Missing fields in CSV: {missing_fields}")
     print("Available fields:", [c for c in artworks.columns if any(rf in c.lower() for rf in required_fields)])
+else:
+    print(f"\n✓ All required fields present: {required_fields}")
 
-# Preview a few artworks with the new thumbnail field
-print("\nSample artworks with thumbnails:")
-print(artworks[["_id", "title", "thumbnail"]].head())
+# Preview a few artworks with key fields
+print("\nSample artworks:")
+display_cols = ["title", "artist", "year", "thumbnail"]
+available_display = [c for c in display_cols if c in artworks.columns]
+print(artworks[available_display].head())
 print(f"\nTotal artworks: {len(artworks)}")
+print(f"Artworks with artist names: {artworks['artist'].notna().sum() if 'artist' in artworks.columns else 0}")
 print(f"Artworks with thumbnails: {artworks['thumbnail'].notna().sum()}")
 
 # Save to CSV - this file will be used by build_faiss_index_ting.py
