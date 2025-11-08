@@ -11,8 +11,8 @@
   "ef_search": 64,
   "hnsw_m": 32,
   "metadata": {
-    "num_rows": 386,
-    "num_original": 382,
+    "num_rows": 500,
+    "num_original": 495,
     "num_shelves": 11
   }
 }

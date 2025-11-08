@@ -442,8 +442,9 @@ def make_thumbnail_path(row: pd.Series) -> str:
 def parse_shelf_numbers(shelf_value: Any) -> List[str]:
     """
     Parse shelfNo value and return list of individual shelf numbers.
-    Handles formats like: "3", "3;4", "07", "3;4;5", etc.
+    Handles formats like: "3", "3;4", "3,4", "07", "3;4;5", "0, 1", "0, 2, 3, 4", etc.
     Normalizes shelf numbers by removing leading zeros (e.g., "07" -> "7").
+    Supports both semicolon and comma separators.
     """
     if pd.isna(shelf_value) or shelf_value is None:
         return []
@@ -451,6 +452,10 @@ def parse_shelf_numbers(shelf_value: Any) -> List[str]:
     shelf_str = str(shelf_value).strip()
     if not shelf_str:
         return []
+    
+    # Split by semicolon or comma (handle both separators)
+    # First replace commas with semicolons for consistent splitting
+    shelf_str = shelf_str.replace(",", ";")
     
     # Split by semicolon and clean each part
     shelf_numbers = []

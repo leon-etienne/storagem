@@ -270,6 +270,35 @@ def find_shelf_representatives(
     df = df[df["shelfNo"] != ""].copy()  # Remove empty shelf numbers
     print(f"Artworks with shelf info: {len(df)}")
     
+    # Handle multiple shelf numbers per artwork (split by semicolon or comma)
+    # This duplicates the logic from read_data_ting.py to ensure proper splitting
+    def parse_shelf_numbers(shelf_value):
+        """Parse shelfNo value and return list of individual shelf numbers."""
+        if pd.isna(shelf_value) or shelf_value is None:
+            return []
+        shelf_str = str(shelf_value).strip()
+        if not shelf_str:
+            return []
+        # Split by semicolon or comma
+        shelf_numbers = []
+        for part in shelf_str.replace(",", ";").split(";"):
+            part = part.strip()
+            if part:
+                try:
+                    normalized = str(int(part))  # Remove leading zeros
+                    shelf_numbers.append(normalized)
+                except ValueError:
+                    shelf_numbers.append(part)
+        return shelf_numbers
+    
+    # Parse shelf numbers and explode to create one row per shelf
+    df["shelf_list"] = df["shelfNo"].apply(parse_shelf_numbers)
+    df = df[df["shelf_list"].apply(len) > 0].copy()  # Remove rows with no shelf numbers
+    df = df.explode("shelf_list", ignore_index=True)
+    df["shelfNo"] = df["shelf_list"].astype(str)
+    df = df.drop(columns=["shelf_list"])
+    print(f"After splitting multiple shelf numbers: {len(df)} artworks")
+    
     # Create embeddings for all artworks
     print("Creating embeddings...")
     embeddings = []
