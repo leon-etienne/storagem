@@ -407,15 +407,29 @@ def extract_filename_from_asset(asset_value: Any) -> Optional[str]:
 
 
 def make_thumbnail_path(row: pd.Series) -> str:
-    """Construct a thumbnail path for each artwork."""
-    BASE_THUMB_PATH = "/thumbnails"
+    """Construct a relative thumbnail path for each artwork."""
+    from pathlib import Path
+    
+    # Base directory for production export
+    BASE_DIR = "production-export-2025-11-04t14-27-00-000z"
+    # Construct relative path: production-export-2025-11-04t14-27-00-000z/images/
+    images_dir = Path(BASE_DIR) / "images"
     
     # Try to extract filename from thumbnail._sanityAsset
     thumb_asset = row.get("thumbnail._sanityAsset")
     if thumb_asset:
         filename = extract_filename_from_asset(thumb_asset)
         if filename:
-            return f"{BASE_THUMB_PATH}/{filename}"
+            # Check if file exists
+            full_path = images_dir / filename
+            if full_path.exists():
+                return str(full_path)
+            # If exact match doesn't exist, try to find by hash
+            hash_part = filename.split("-")[0] if "-" in filename else filename.split(".")[0]
+            if images_dir.exists():
+                for img_file in images_dir.iterdir():
+                    if img_file.is_file() and img_file.name.startswith(hash_part):
+                        return str(images_dir / img_file.name)
     
     # Fallback to slug-based naming
     slug = row.get("slug", "")
@@ -426,15 +440,20 @@ def make_thumbnail_path(row: pd.Series) -> str:
             slug_str = slug_str.replace("--", "-")
         slug_str = slug_str.strip("-")
         if slug_str:
-            return f"{BASE_THUMB_PATH}/{slug_str}.jpg"
+            slug_path = images_dir / f"{slug_str}.jpg"
+            if slug_path.exists():
+                return str(slug_path)
     
     # Last resort: use _id
     artwork_id = row.get("_id", "")
     if artwork_id:
         artwork_id_clean = str(artwork_id).replace("drafts.", "").replace(".", "-")
-        return f"{BASE_THUMB_PATH}/{artwork_id_clean}.jpg"
+        id_path = images_dir / f"{artwork_id_clean}.jpg"
+        if id_path.exists():
+            return str(id_path)
     
-    return f"{BASE_THUMB_PATH}/unknown.jpg"
+    # If no image found, return empty string (leave blank)
+    return ""
 
 
 # ---------- SHELF NUMBER HANDLING ----------
@@ -629,7 +648,19 @@ if __name__ == "__main__":
     print(artworks[available_display].head())
     print(f"\nTotal artworks: {len(artworks)}")
     print(f"Artworks with artist names: {artworks['artist'].notna().sum() if 'artist' in artworks.columns else 0}")
-    print(f"Artworks with thumbnails: {artworks['thumbnail'].notna().sum()}")
+    # Count thumbnails that are not empty (not NaN and not empty string)
+    if 'thumbnail' in artworks.columns:
+        thumbnails_count = ((artworks['thumbnail'].notna()) & (artworks['thumbnail'] != "")).sum()
+        print(f"Artworks with thumbnails: {thumbnails_count}")
+    else:
+        print(f"Artworks with thumbnails: 0")
+    # Count artworks in stock (status column contains "inStock", "onLoan", etc.)
+    if 'status' in artworks.columns:
+        # Count artworks where status is "inStock" (case-insensitive)
+        in_stock_count = artworks['status'].astype(str).str.lower().isin(['instock']).sum()
+        print(f"Artworks in stock: {in_stock_count}")
+    else:
+        print(f"Artworks in stock: 0")
     
     # Save to CSV
     output_file = "artworks_with_thumbnails_ting.csv"

@@ -56,18 +56,78 @@ def extract_filename_from_asset(asset_value) -> Optional[str]:
     return None
 
 
-def make_thumbnail_path(row: pd.Series) -> str:
-    """Construct a thumbnail path for each artwork using the same logic as read_data_ting.py."""
+def find_actual_image_file(filename: str, base_dir: str = "production-export-2025-11-04t14-27-00-000z") -> Optional[str]:
+    """Find the actual image file in the images directory, handling variations in filename."""
+    if not filename:
+        return None
+    
+    images_dir = Path(base_dir) / "images"
+    if not images_dir.exists():
+        return None
+    
+    # Try exact match first
+    exact_path = images_dir / filename
+    if exact_path.exists():
+        return filename
+    
+    # Try to find by hash (first part before dimensions)
+    # Filenames are like: "b44fd62fdf7c85cf0e0fbd5e49c30cf137e118-7890x5320.jpg"
+    # Extract hash part (before first dash or dimension pattern)
+    hash_part = filename.split("-")[0] if "-" in filename else filename.split(".")[0]
+    
+    # Search for files starting with this hash
+    for img_file in images_dir.iterdir():
+        if img_file.is_file() and img_file.name.startswith(hash_part):
+            return img_file.name
+    
+    # Try case-insensitive search
+    filename_lower = filename.lower()
+    for img_file in images_dir.iterdir():
+        if img_file.is_file() and img_file.name.lower() == filename_lower:
+            return img_file.name
+    
+    return None
+
+
+def make_thumbnail_path(row: pd.Series, base_dir: str = "production-export-2025-11-04t14-27-00-000z") -> str:
+    """Construct a thumbnail path for each artwork, verifying the file actually exists."""
     BASE_THUMB_PATH = "/thumbnails"
+    images_dir = Path(base_dir) / "images"
     
     # Try to extract filename from thumbnail._sanityAsset
-    thumb_asset = row.get("thumbnail._sanityAsset")
+    # Access the column with dot in name - use direct indexing which works for Series
+    thumb_asset = None
+    if "thumbnail._sanityAsset" in row.index:
+        thumb_asset = row["thumbnail._sanityAsset"]
+    else:
+        # Fallback: try get method or convert to dict
+        thumb_asset = row.get("thumbnail._sanityAsset", None)
+        if thumb_asset is None:
+            row_dict = row.to_dict() if hasattr(row, 'to_dict') else dict(row)
+            thumb_asset = row_dict.get("thumbnail._sanityAsset")
+    
     if thumb_asset and pd.notna(thumb_asset):
         filename = extract_filename_from_asset(thumb_asset)
         if filename:
-            return f"{BASE_THUMB_PATH}/{filename}"
+            # Verify the file actually exists
+            actual_file = find_actual_image_file(filename, base_dir)
+            if actual_file:
+                return f"{BASE_THUMB_PATH}/{actual_file}"
     
-    # Fallback to slug-based naming
+    # Fallback: search images directory for files matching hash patterns in the row
+    if images_dir.exists():
+        row_dict = row.to_dict() if hasattr(row, 'to_dict') else {k: row[k] for k in row.index}
+        for key, value in row_dict.items():
+            if value and isinstance(value, str) and len(value) > 20:
+                # Look for hash-like patterns
+                for img_file in images_dir.iterdir():
+                    if img_file.is_file():
+                        # Check if hash part matches
+                        hash_part = value[:40] if len(value) >= 40 else value
+                        if hash_part in img_file.name or img_file.name.startswith(hash_part):
+                            return f"{BASE_THUMB_PATH}/{img_file.name}"
+    
+    # Fallback to slug-based naming (but won't verify existence)
     slug = row.get("slug", "")
     if slug and pd.notna(slug):
         slug_str = str(slug).strip().replace(" ", "-").replace("_", "-")
@@ -76,38 +136,68 @@ def make_thumbnail_path(row: pd.Series) -> str:
             slug_str = slug_str.replace("--", "-")
         slug_str = slug_str.strip("-")
         if slug_str:
+            # Check if slug-based file exists
+            slug_file = find_actual_image_file(f"{slug_str}.jpg", base_dir)
+            if slug_file:
+                return f"{BASE_THUMB_PATH}/{slug_file}"
             return f"{BASE_THUMB_PATH}/{slug_str}.jpg"
     
     # Last resort: use _id
     artwork_id = row.get("_id", "")
     if artwork_id and pd.notna(artwork_id):
         artwork_id_clean = str(artwork_id).replace("drafts.", "").replace(".", "-")
+        id_file = find_actual_image_file(f"{artwork_id_clean}.jpg", base_dir)
+        if id_file:
+            return f"{BASE_THUMB_PATH}/{id_file}"
         return f"{BASE_THUMB_PATH}/{artwork_id_clean}.jpg"
     
     return f"{BASE_THUMB_PATH}/unknown.jpg"
 
 
 def load_image(image_path: str, base_dir: str = "production-export-2025-11-04t14-27-00-000z") -> Optional[Image.Image]:
-    """Load image from thumbnail path."""
+    """Load image from thumbnail path. Handles relative paths from CSV."""
     if pd.isna(image_path) or not image_path:
         return None
     
-    # Handle thumbnail paths like "/thumbnails/filename.jpg"
-    if image_path.startswith("/thumbnails/"):
+    # Paths from CSV are relative like: production-export-2025-11-04t14-27-00-000z/images/filename.jpg
+    # Try using the path directly first
+    full_path = Path(image_path)
+    if full_path.exists() and full_path.is_file():
+        try:
+            return Image.open(full_path).convert("RGB")
+        except Exception as e:
+            pass
+    
+    # If direct path doesn't work, try extracting filename and looking in base_dir/images
+    # Handle paths like "production-export-2025-11-04t14-27-00-000z/images/filename.jpg"
+    if "images/" in image_path:
+        filename = image_path.split("images/")[-1]
+    elif image_path.startswith("/thumbnails/"):
         filename = image_path.replace("/thumbnails/", "")
-        full_path = Path(base_dir) / "images" / filename
     else:
-        # Try direct path
-        full_path = Path(image_path)
+        filename = image_path
     
-    if not full_path.exists():
-        return None
+    # Try in base_dir/images
+    images_dir = Path(base_dir) / "images"
+    if images_dir.exists():
+        full_path = images_dir / filename
+        if full_path.exists():
+            try:
+                return Image.open(full_path).convert("RGB")
+            except Exception as e:
+                pass
+        
+        # Try to find by hash or partial match
+        actual_file = find_actual_image_file(filename, base_dir)
+        if actual_file:
+            full_path = images_dir / actual_file
+            if full_path.exists():
+                try:
+                    return Image.open(full_path).convert("RGB")
+                except Exception as e:
+                    pass
     
-    try:
-        return Image.open(full_path).convert("RGB")
-    except Exception as e:
-        print(f"Error loading image {full_path}: {e}")
-        return None
+    return None
 
 
 @torch.inference_mode()
@@ -197,14 +287,15 @@ def embed_artwork(row: pd.Series, base_dir: str = "production-export-2025-11-04t
     text_emb = 0.4 * title_emb + 0.6 * other_emb
     
     # Load and embed thumbnail image
+    # Read thumbnail path directly from CSV (already set by read_data_ting.py)
     thumbnail_path = row.get("thumbnail", "")
-    image = load_image(thumbnail_path, base_dir) if thumbnail_path else None
+    image = load_image(thumbnail_path, base_dir) if thumbnail_path and pd.notna(thumbnail_path) else None
     image_emb = embed_image(image) if image is not None else None
     
     # Combine text and image embeddings
     if image_emb is not None and np.any(image_emb):  # Image available and non-zero
         # Weighted combination: 60% text, 40% image
-        combined_emb = 0.4 * text_emb + 0.6 * image_emb
+        combined_emb = 0.6 * text_emb + 0.4 * image_emb
     else:
         # Use only text embedding
         combined_emb = text_emb
@@ -297,8 +388,8 @@ def find_cluster_representatives(
             artwork_no = artwork.get("artworkNo", artwork.get("id", "N/A"))
             shelf_no = artwork.get("shelfNo", "N/A")
             artwork_id = artwork.get("_id", artwork.get("id", "N/A"))
-            # Construct thumbnail path using the same logic as read_data_ting.py
-            thumbnail = make_thumbnail_path(artwork)
+            # Read thumbnail path directly from CSV (already set by read_data_ting.py)
+            thumbnail = artwork.get("thumbnail", "N/A")
             
             results.append({
                 "cluster": cluster_id,
@@ -431,8 +522,8 @@ def find_shelf_representatives(
             artwork_no = artwork.get("artworkNo", artwork.get("id", "N/A"))
             artwork_id = artwork.get("_id", artwork.get("id", "N/A"))
             cluster = artwork.get("cluster", "N/A")
-            # Construct thumbnail path using the same logic as read_data_ting.py
-            thumbnail = make_thumbnail_path(artwork)
+            # Read thumbnail path directly from CSV (already set by read_data_ting.py)
+            thumbnail = artwork.get("thumbnail", "N/A")
             
             results.append({
                 "shelf_no": shelf_no,
