@@ -27,3 +27,5 @@ Icon?
 *.bak
 *.tmp
 
+
+/downloads/*
