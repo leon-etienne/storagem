@@ -83,7 +83,8 @@ def embed_image(image: Image.Image, normalize: bool = True) -> np.ndarray:
 def embed_artwork(row: pd.Series, base_dir: str = "production-export-2025-11-04t14-27-00-000z") -> np.ndarray:
     """
     Create a combined embedding for an artwork.
-    Combines text fields (artist, title, year, description, size, handling_status) and thumbnail image.
+    Combines text fields (artist, title, year, description, size, handling_status, internalNote) and thumbnail image.
+    Title has stronger weight in the embedding.
     Uses weighted combination: 60% text, 40% image (or 100% text if image unavailable).
     """
     # Collect text fields
@@ -94,10 +95,12 @@ def embed_artwork(row: pd.Series, base_dir: str = "production-export-2025-11-04t
     if pd.notna(artist) and str(artist).strip():
         text_parts.append(f"artist: {str(artist).strip()}")
     
-    # Title
+    # Title (will be embedded separately with higher weight)
     title = row.get("title", "")
+    title_text = ""
     if pd.notna(title) and str(title).strip():
-        text_parts.append(f"title: {str(title).strip()}")
+        title_text = f"title: {str(title).strip()}"
+        text_parts.append(title_text)
     
     # Year
     year = row.get("year", "")
@@ -119,11 +122,22 @@ def embed_artwork(row: pd.Series, base_dir: str = "production-export-2025-11-04t
     if pd.notna(handling_status) and str(handling_status).strip():
         text_parts.append(f"handling_status: {str(handling_status).strip()}")
     
-    # Combine all text fields
-    combined_text = ". ".join(text_parts) if text_parts else ""
+    # Internal note
+    internal_note = row.get("internalNote", "")
+    if pd.notna(internal_note) and str(internal_note).strip():
+        text_parts.append(f"internalNote: {str(internal_note).strip()}")
     
-    # Embed text
-    text_emb = embed_text(combined_text)
+    # Combine all text fields (except title which will be weighted separately)
+    other_text = ". ".join([p for p in text_parts if not p.startswith("title:")]) if text_parts else ""
+    
+    # Embed title separately with higher weight
+    title_emb = embed_text(title_text) if title_text else np.zeros(512)
+    
+    # Embed other fields
+    other_emb = embed_text(other_text) if other_text else np.zeros(512)
+    
+    # Combine text embeddings with title having stronger weight (40% title, 60% other)
+    text_emb = 0.4 * title_emb + 0.6 * other_emb
     
     # Load and embed thumbnail image
     thumbnail_path = row.get("thumbnail", "")
@@ -133,7 +147,7 @@ def embed_artwork(row: pd.Series, base_dir: str = "production-export-2025-11-04t
     # Combine text and image embeddings
     if image_emb is not None and np.any(image_emb):  # Image available and non-zero
         # Weighted combination: 60% text, 40% image
-        combined_emb = 0.6 * text_emb + 0.4 * image_emb
+        combined_emb = 0.4 * text_emb + 0.6 * image_emb
     else:
         # Use only text embedding
         combined_emb = text_emb
