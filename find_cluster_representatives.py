@@ -405,10 +405,106 @@ def find_cluster_representatives(
                 "distance_to_centroid": float(distances[idx])
             })
         
-        # Print summary for this cluster
-        top_artwork = cluster_df.iloc[top_indices[0]]
-        print(f"Cluster {cluster_id}: Top artwork - {top_artwork.get('title', 'Unknown')} by {top_artwork.get('artist', 'Unknown')} (No. {top_artwork.get('artworkNo', top_artwork.get('id', 'N/A'))}, Shelf: {top_artwork.get('shelfNo', 'N/A')}) - {len(cluster_df)} artworks total")
+    return pd.DataFrame(results)
+
+
+def find_cluster_outliers(
+    csv_path: str,
+    base_dir: str = "production-export-2025-11-04t14-27-00-000z",
+    batch_size: int = 32
+) -> pd.DataFrame:
+    """
+    Find the top 5 outlier artworks for each cluster (furthest from centroid).
+    Returns a DataFrame with cluster, index, id, title, artist, artwork_no, 
+    shelf_no, rank, num_artworks_in_cluster, and distance_to_centroid.
+    """
+    print(f"Loading CSV: {csv_path}")
+    df = pd.read_csv(csv_path)
+    print(f"Loaded {len(df)} artworks")
     
+    # Filter to artworks with cluster information
+    if "cluster" not in df.columns:
+        print("ERROR: 'cluster' column not found in CSV")
+        return pd.DataFrame()
+    
+    df = df[df["cluster"].notna()].copy()
+    print(f"Artworks with cluster info: {len(df)}")
+    
+    # Create embeddings for all artworks
+    print("Creating embeddings...")
+    embeddings = []
+    valid_indices = []
+    
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Embedding artworks"):
+        try:
+            emb = embed_artwork(row, base_dir)
+            embeddings.append(emb)
+            valid_indices.append(idx)
+        except Exception as e:
+            print(f"Error embedding artwork at index {idx}: {e}")
+            continue
+    
+    if not embeddings:
+        print("ERROR: No embeddings created")
+        return pd.DataFrame()
+    
+    embeddings = np.array(embeddings, dtype=np.float32)
+    df_valid = df.loc[valid_indices].copy()
+    print(f"Created {len(embeddings)} embeddings")
+    
+    # Group by cluster and find outliers for each
+    print("Finding cluster outliers...")
+    results = []
+    
+    unique_clusters = sorted(df_valid["cluster"].unique())
+    for cluster_id in tqdm(unique_clusters, desc="Processing clusters"):
+        cluster_mask = df_valid["cluster"] == cluster_id
+        cluster_df = df_valid[cluster_mask].copy()
+        cluster_embeddings = embeddings[cluster_mask]
+        
+        if len(cluster_embeddings) == 0:
+            continue
+        
+        # Calculate centroid (average embedding) of the cluster
+        centroid = np.mean(cluster_embeddings, axis=0)
+        centroid = centroid / np.linalg.norm(centroid)  # Normalize
+        
+        # Find distances to centroid for all artworks in cluster
+        distances = np.linalg.norm(cluster_embeddings - centroid, axis=1)
+        
+        # Get top 5 furthest artworks (sorted by distance, descending)
+        top_k = min(5, len(distances))
+        top_indices = np.argsort(distances)[-top_k:][::-1]  # Get largest distances first
+        
+        # Add top 5 outliers to results
+        for rank, idx in enumerate(top_indices, 1):
+            artwork = cluster_df.iloc[idx]
+            
+            # Get the id column value from CSV (not row index)
+            csv_id = artwork.get("id", "N/A")
+            
+            title = artwork.get("title", "Unknown")
+            artist = artwork.get("artist", "Unknown")
+            artwork_no = artwork.get("artworkNo", artwork.get("id", "N/A"))
+            shelf_no = artwork.get("shelfNo", "N/A")
+            artwork_id = artwork.get("_id", artwork.get("id", "N/A"))
+            # Read thumbnail path directly from CSV (already set by read_data_ting.py)
+            thumbnail = artwork.get("thumbnail", "N/A")
+            
+            results.append({
+                "cluster": cluster_id,
+                "index": csv_id,
+                "id": artwork_id,
+                "title": title,
+                "artist": artist,
+                "artwork_no": artwork_no,
+                "shelf_no": shelf_no,
+                "thumbnail": thumbnail,
+                "rank": rank,
+                "num_artworks_in_cluster": len(cluster_df),
+                "distance_to_centroid": float(distances[idx])
+            })
+        
     return pd.DataFrame(results)
 
 
@@ -539,10 +635,158 @@ def find_shelf_representatives(
                 "distance_to_centroid": float(distances[idx])
             })
         
-        # Print summary for this shelf
-        top_artwork = shelf_df.iloc[top_indices[0]]
-        print(f"Shelf {shelf_no}: Top artwork - {top_artwork.get('title', 'Unknown')} by {top_artwork.get('artist', 'Unknown')} (No. {top_artwork.get('artworkNo', top_artwork.get('id', 'N/A'))}) - {len(shelf_df)} artworks total")
+    return pd.DataFrame(results)
+
+
+def find_shelf_outliers(
+    csv_path: str,
+    base_dir: str = "production-export-2025-11-04t14-27-00-000z",
+    batch_size: int = 32
+) -> pd.DataFrame:
+    """
+    Find the top 5 outlier artworks for each shelf (furthest from centroid).
+    Returns a DataFrame with shelf_no, index, id, title, artist, artwork_no, 
+    cluster, rank, num_artworks_in_shelf, and distance_to_centroid.
+    """
+    print(f"Loading CSV: {csv_path}")
+    df = pd.read_csv(csv_path)
+    print(f"Loaded {len(df)} artworks")
     
+    # Filter to artworks with shelf information
+    if "shelfNo" not in df.columns:
+        print("ERROR: 'shelfNo' column not found in CSV")
+        return pd.DataFrame()
+    
+    df = df[df["shelfNo"].notna()].copy()
+    print(f"Artworks with shelf info: {len(df)}")
+    
+    # Handle multiple shelf numbers (split by semicolon or comma)
+    # Create a list column for shelf numbers
+    if "shelfNo" in df.columns:
+        def parse_shelf_list(shelf_value):
+            if pd.isna(shelf_value):
+                return []
+            shelf_str = str(shelf_value).strip()
+            if not shelf_str:
+                return []
+            # Replace commas with semicolons for consistent splitting
+            shelf_str = shelf_str.replace(",", ";")
+            return [s.strip() for s in shelf_str.split(";") if s.strip()]
+        
+        df["shelf_list"] = df["shelfNo"].apply(parse_shelf_list)
+        
+        # Explode to create separate rows for each shelf number
+        artworks_no_shelf = df[df["shelf_list"].apply(len) == 0].copy()
+        artworks_with_shelf = df[df["shelf_list"].apply(len) > 0].copy()
+        
+        if len(artworks_with_shelf) > 0:
+            artworks_exploded = artworks_with_shelf.explode("shelf_list")
+            artworks_exploded["shelfNo"] = artworks_exploded["shelf_list"]
+            df = pd.concat([artworks_no_shelf, artworks_exploded], ignore_index=True)
+            df = df.drop(columns=["shelf_list"])
+    
+    print(f"After splitting multiple shelf numbers: {len(df)} artworks")
+    
+    # Create embeddings for all artworks
+    print("Creating embeddings...")
+    embeddings = []
+    valid_indices = []
+    
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Embedding artworks"):
+        try:
+            emb = embed_artwork(row, base_dir)
+            embeddings.append(emb)
+            valid_indices.append(idx)
+        except Exception as e:
+            print(f"Error embedding artwork at index {idx}: {e}")
+            continue
+    
+    if not embeddings:
+        print("ERROR: No embeddings created")
+        return pd.DataFrame()
+    
+    embeddings = np.array(embeddings, dtype=np.float32)
+    df_valid = df.loc[valid_indices].copy()
+    print(f"Created {len(embeddings)} embeddings")
+    
+    # Group by shelf and find outliers for each
+    print("Finding shelf outliers...")
+    results = []
+    
+    unique_shelves = sorted(df_valid["shelfNo"].unique(), key=lambda x: str(x))
+    for shelf_no in tqdm(unique_shelves, desc="Processing shelves"):
+        shelf_mask = df_valid["shelfNo"] == shelf_no
+        shelf_df = df_valid[shelf_mask].copy()
+        shelf_embeddings = embeddings[shelf_mask]
+        
+        if len(shelf_embeddings) == 0:
+            continue
+        
+        # Calculate centroid (average embedding) of the shelf
+        centroid = np.mean(shelf_embeddings, axis=0)
+        centroid = centroid / np.linalg.norm(centroid)  # Normalize
+        
+        # Find distances to centroid for all artworks on this shelf
+        distances = np.linalg.norm(shelf_embeddings - centroid, axis=1)
+        
+        # Select diverse outliers (ensure artist diversity)
+        unique_artists = shelf_df["artist"].unique()
+        selected_indices = []
+        selected_artists = set()
+        
+        # First pass: select furthest from centroid from each artist
+        for artist in unique_artists:
+            if len(selected_indices) >= 5:
+                break
+            artist_mask = shelf_df["artist"] == artist
+            artist_indices = np.where(artist_mask)[0]
+            if len(artist_indices) > 0:
+                artist_distances = distances[artist_indices]
+                furthest_idx = artist_indices[np.argmax(artist_distances)]
+                selected_indices.append(furthest_idx)
+                selected_artists.add(artist)
+        
+        # Second pass: fill remaining slots with furthest from centroid
+        remaining = min(5, len(distances)) - len(selected_indices)
+        if remaining > 0:
+            all_indices = set(range(len(shelf_embeddings)))
+            remaining_candidates = sorted(all_indices - set(selected_indices),
+                                        key=lambda i: distances[i], reverse=True)[:remaining]
+            selected_indices.extend(remaining_candidates)
+        
+        # Sort selected indices by distance to centroid (descending) for ranking
+        selected_indices = sorted(selected_indices, key=lambda i: distances[i], reverse=True)[:5]
+        top_indices = selected_indices
+        
+        # Add top 5 outliers to results
+        for rank, idx in enumerate(top_indices, 1):
+            artwork = shelf_df.iloc[idx]
+            
+            # Get the id column value from CSV (not row index)
+            csv_id = artwork.get("id", "N/A")
+            
+            title = artwork.get("title", "Unknown")
+            artist = artwork.get("artist", "Unknown")
+            artwork_no = artwork.get("artworkNo", artwork.get("id", "N/A"))
+            artwork_id = artwork.get("_id", artwork.get("id", "N/A"))
+            cluster = artwork.get("cluster", "N/A")
+            # Read thumbnail path directly from CSV (already set by read_data_ting.py)
+            thumbnail = artwork.get("thumbnail", "N/A")
+            
+            results.append({
+                "shelf_no": shelf_no,
+                "index": csv_id,
+                "id": artwork_id,
+                "title": title,
+                "artist": artist,
+                "artwork_no": artwork_no,
+                "cluster": cluster,
+                "thumbnail": thumbnail,
+                "rank": rank,
+                "num_artworks_in_shelf": len(shelf_df),
+                "distance_to_centroid": float(distances[idx])
+            })
+        
     return pd.DataFrame(results)
 
 
@@ -553,34 +797,20 @@ def main():
     parser.add_argument("--csv", default="artworks_with_thumbnails_ting.csv", help="Path to CSV file")
     parser.add_argument("--base-dir", default="production-export-2025-11-04t14-27-00-000z", help="Base directory for images")
     parser.add_argument("--output", default="cluster_representatives.csv", help="Output CSV file")
-    parser.add_argument("--mode", default="cluster", choices=["cluster", "shelf"], help="Group by cluster or shelf")
+    parser.add_argument("--mode", default="cluster", choices=["cluster", "shelf", "cluster-outliers", "shelf-outliers"], help="Group by cluster or shelf, or find outliers")
     args = parser.parse_args()
     
     if args.mode == "cluster":
         results_df = find_cluster_representatives(args.csv, args.base_dir)
         
         if not results_df.empty:
-            # Display results grouped by cluster
-            print("\n" + "="*60)
-            print("CLUSTER REPRESENTATIVES (Top 5 per cluster)")
-            print("="*60)
-            
-            for cluster_id in sorted(results_df["cluster"].unique()):
-                cluster_results = results_df[results_df["cluster"] == cluster_id].sort_values("rank")
-                print(f"\nCluster {cluster_id} ({cluster_results.iloc[0]['num_artworks_in_cluster']} artworks total):")
-                print("-" * 60)
-                
-                for _, row in cluster_results.iterrows():
-                    print(f"  Rank {row['rank']}: {row['title']} by {row['artist']} (No. {row['artwork_no']})")
-                    print(f"    - Index: {row['index']}")
-                    print(f"    - ID: {row['id']}")
-                    print(f"    - Shelf No: {row['shelf_no']}")
-                    print(f"    - Distance to centroid: {row['distance_to_centroid']:.4f}")
-                    print()
-            
             # Save to CSV
             results_df.to_csv(args.output, index=False)
-            print(f"Results saved to {args.output}")
+            num_clusters = len(results_df["cluster"].unique())
+            num_results = len(results_df)
+            print(f"\n✓ Processed {num_clusters} clusters")
+            print(f"✓ Found {num_results} representative artworks (top 5 per cluster)")
+            print(f"✓ Results saved to {args.output}")
         else:
             print("No results to display")
     
@@ -588,27 +818,41 @@ def main():
         results_df = find_shelf_representatives(args.csv, args.base_dir)
         
         if not results_df.empty:
-            # Display results grouped by shelf
-            print("\n" + "="*60)
-            print("SHELF REPRESENTATIVES (Top 5 per shelf)")
-            print("="*60)
-            
-            for shelf_no in sorted(results_df["shelf_no"].unique(), key=lambda x: str(x)):
-                shelf_results = results_df[results_df["shelf_no"] == shelf_no].sort_values("rank")
-                print(f"\nShelf {shelf_no} ({shelf_results.iloc[0]['num_artworks_in_shelf']} artworks total):")
-                print("-" * 60)
-                
-                for _, row in shelf_results.iterrows():
-                    print(f"  Rank {row['rank']}: {row['title']} by {row['artist']} (No. {row['artwork_no']})")
-                    print(f"    - Index: {row['index']}")
-                    print(f"    - ID: {row['id']}")
-                    print(f"    - Cluster: {row['cluster']}")
-                    print(f"    - Distance to centroid: {row['distance_to_centroid']:.4f}")
-                    print()
-            
             # Save to CSV
             results_df.to_csv(args.output, index=False)
-            print(f"Results saved to {args.output}")
+            num_shelves = len(results_df["shelf_no"].unique())
+            num_results = len(results_df)
+            print(f"\n✓ Processed {num_shelves} shelves")
+            print(f"✓ Found {num_results} representative artworks (top 5 per shelf)")
+            print(f"✓ Results saved to {args.output}")
+        else:
+            print("No results to display")
+    
+    elif args.mode == "cluster-outliers":
+        results_df = find_cluster_outliers(args.csv, args.base_dir)
+        
+        if not results_df.empty:
+            # Save to CSV
+            results_df.to_csv(args.output, index=False)
+            num_clusters = len(results_df["cluster"].unique())
+            num_results = len(results_df)
+            print(f"\n✓ Processed {num_clusters} clusters")
+            print(f"✓ Found {num_results} outlier artworks (top 5 furthest per cluster)")
+            print(f"✓ Results saved to {args.output}")
+        else:
+            print("No results to display")
+    
+    elif args.mode == "shelf-outliers":
+        results_df = find_shelf_outliers(args.csv, args.base_dir)
+        
+        if not results_df.empty:
+            # Save to CSV
+            results_df.to_csv(args.output, index=False)
+            num_shelves = len(results_df["shelf_no"].unique())
+            num_results = len(results_df)
+            print(f"\n✓ Processed {num_shelves} shelves")
+            print(f"✓ Found {num_results} outlier artworks (top 5 furthest per shelf)")
+            print(f"✓ Results saved to {args.output}")
         else:
             print("No results to display")
 

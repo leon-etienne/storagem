@@ -648,12 +648,27 @@ if __name__ == "__main__":
     print(artworks[available_display].head())
     print(f"\nTotal artworks: {len(artworks)}")
     print(f"Artworks with artist names: {artworks['artist'].notna().sum() if 'artist' in artworks.columns else 0}")
+    # Count artworks with shelf numbers (not empty/NaN)
+    if 'shelfNo' in artworks.columns:
+        shelf_count = ((artworks['shelfNo'].notna()) & (artworks['shelfNo'] != "")).sum()
+        print(f"Artworks with shelf numbers: {shelf_count}")
+    else:
+        print(f"Artworks with shelf numbers: 0")
     # Count thumbnails that are not empty (not NaN and not empty string)
     if 'thumbnail' in artworks.columns:
         thumbnails_count = ((artworks['thumbnail'].notna()) & (artworks['thumbnail'] != "")).sum()
-        print(f"Artworks with thumbnails: {thumbnails_count}")
+        print(f"Artworks with images: {thumbnails_count}")
     else:
-        print(f"Artworks with thumbnails: 0")
+        print(f"Artworks with images: 0")
+    # Count artworks with both shelf number and image
+    if 'shelfNo' in artworks.columns and 'thumbnail' in artworks.columns:
+        both_count = (
+            ((artworks['shelfNo'].notna()) & (artworks['shelfNo'] != "")) &
+            ((artworks['thumbnail'].notna()) & (artworks['thumbnail'] != ""))
+        ).sum()
+        print(f"Artworks with both shelf number and image: {both_count}")
+    else:
+        print(f"Artworks with both shelf number and image: 0")
     # Count artworks in stock (status column contains "inStock", "onLoan", etc.)
     if 'status' in artworks.columns:
         # Count artworks where status is "inStock" (case-insensitive)
