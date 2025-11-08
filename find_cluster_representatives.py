@@ -30,6 +30,63 @@ processor = CLIPProcessor.from_pretrained(MODEL_NAME)
 model = CLIPModel.from_pretrained(MODEL_NAME).to(device).eval()
 
 
+def extract_filename_from_asset(asset_value) -> Optional[str]:
+    """Extract filename from Sanity asset reference."""
+    if not asset_value or pd.isna(asset_value):
+        return None
+    
+    asset_str = str(asset_value).strip()
+    
+    # Handle Sanity asset format: "image@file://./images/filename.jpg"
+    if "@file://" in asset_str:
+        if "./images/" in asset_str:
+            filename = asset_str.split("./images/")[-1]
+        elif "./files/" in asset_str:
+            filename = asset_str.split("./files/")[-1]
+        elif "/" in asset_str:
+            parts = asset_str.split("/")
+            filename = parts[-1]
+        else:
+            return None
+        # Remove query parameters if present
+        if "?" in filename:
+            filename = filename.split("?")[0]
+        return filename
+    
+    return None
+
+
+def make_thumbnail_path(row: pd.Series) -> str:
+    """Construct a thumbnail path for each artwork using the same logic as read_data_ting.py."""
+    BASE_THUMB_PATH = "/thumbnails"
+    
+    # Try to extract filename from thumbnail._sanityAsset
+    thumb_asset = row.get("thumbnail._sanityAsset")
+    if thumb_asset and pd.notna(thumb_asset):
+        filename = extract_filename_from_asset(thumb_asset)
+        if filename:
+            return f"{BASE_THUMB_PATH}/{filename}"
+    
+    # Fallback to slug-based naming
+    slug = row.get("slug", "")
+    if slug and pd.notna(slug):
+        slug_str = str(slug).strip().replace(" ", "-").replace("_", "-")
+        slug_str = slug_str.replace("/", "-").replace("\\", "-")
+        while "--" in slug_str:
+            slug_str = slug_str.replace("--", "-")
+        slug_str = slug_str.strip("-")
+        if slug_str:
+            return f"{BASE_THUMB_PATH}/{slug_str}.jpg"
+    
+    # Last resort: use _id
+    artwork_id = row.get("_id", "")
+    if artwork_id and pd.notna(artwork_id):
+        artwork_id_clean = str(artwork_id).replace("drafts.", "").replace(".", "-")
+        return f"{BASE_THUMB_PATH}/{artwork_id_clean}.jpg"
+    
+    return f"{BASE_THUMB_PATH}/unknown.jpg"
+
+
 def load_image(image_path: str, base_dir: str = "production-export-2025-11-04t14-27-00-000z") -> Optional[Image.Image]:
     """Load image from thumbnail path."""
     if pd.isna(image_path) or not image_path:
@@ -240,6 +297,8 @@ def find_cluster_representatives(
             artwork_no = artwork.get("artworkNo", artwork.get("id", "N/A"))
             shelf_no = artwork.get("shelfNo", "N/A")
             artwork_id = artwork.get("_id", artwork.get("id", "N/A"))
+            # Construct thumbnail path using the same logic as read_data_ting.py
+            thumbnail = make_thumbnail_path(artwork)
             
             results.append({
                 "cluster": cluster_id,
@@ -249,6 +308,7 @@ def find_cluster_representatives(
                 "artist": artist,
                 "artwork_no": artwork_no,
                 "shelf_no": shelf_no,
+                "thumbnail": thumbnail,
                 "rank": rank,
                 "num_artworks_in_cluster": len(cluster_df),
                 "distance_to_centroid": float(distances[idx])
@@ -371,6 +431,8 @@ def find_shelf_representatives(
             artwork_no = artwork.get("artworkNo", artwork.get("id", "N/A"))
             artwork_id = artwork.get("_id", artwork.get("id", "N/A"))
             cluster = artwork.get("cluster", "N/A")
+            # Construct thumbnail path using the same logic as read_data_ting.py
+            thumbnail = make_thumbnail_path(artwork)
             
             results.append({
                 "shelf_no": shelf_no,
@@ -380,6 +442,7 @@ def find_shelf_representatives(
                 "artist": artist,
                 "artwork_no": artwork_no,
                 "cluster": cluster,
+                "thumbnail": thumbnail,
                 "rank": rank,
                 "num_artworks_in_shelf": len(shelf_df),
                 "distance_to_centroid": float(distances[idx])
