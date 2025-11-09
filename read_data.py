@@ -557,7 +557,7 @@ def duplicate_artworks_by_shelf(artworks: pd.DataFrame) -> pd.DataFrame:
 
 if __name__ == "__main__":
     # Path to the NDJSON data file
-    path = "production-export-2025-11-04t14-27-00-000z/data.ndjson"
+    path = "production-export-2025-11-09t12-26-16-007z/data.ndjson"
     
     # Process the file
     df = process_ndjson_file(path)
