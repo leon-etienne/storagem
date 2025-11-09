@@ -582,42 +582,32 @@ if __name__ == "__main__":
             except (ValueError, TypeError):
                 return str(value) if value else ""
         artworks["shelfNo"] = artworks["shelfNo"].apply(format_shelf_number)
-    
     # Add cluster column based on shelf number
     def assign_cluster(shelf_value):
         """
-        Assign cluster based on shelf number:
-        Cluster 1: 5, 9, 1
-        Cluster 2: 3
-        Cluster 3: 4
-        Cluster 4: 2, 6, 7
-        Cluster 5: 8, 0
+        Assign cluster based on shelf number, following clustering:
+        Cluster 1: Shelves 1, 5, 9
+        Cluster 2: Shelves 3, 4
+        Cluster 3: Shelves 2, 6, 7
+        Cluster 4: Shelves 0, 8
         Cluster 0: all other shelf numbers and empty values
-        Returns just the number (0, 1, 2, 3, 4, 5).
+        Returns the cluster number as a string ("0", "1", "2", "3", "4").
         """
         if pd.isna(shelf_value) or shelf_value == "":
             return "0"
-        
         try:
-            # Convert to int for comparison
             shelf_num = int(float(str(shelf_value)))
-            
-            # Assign cluster based on shelf number
-            if shelf_num in [5, 9, 1]:
+            if shelf_num in [1, 5, 9]:
                 return "1"
-            elif shelf_num == 3:
+            elif shelf_num in [3, 4]:
                 return "2"
-            elif shelf_num == 4:
-                return "3"
             elif shelf_num in [2, 6, 7]:
+                return "3"
+            elif shelf_num in [0, 8]:
                 return "4"
-            elif shelf_num in [8, 0]:
-                return "5"
             else:
-                # Shelf number not in any defined cluster, assign to cluster 0
                 return "0"
         except (ValueError, TypeError):
-            # Non-numeric shelf value, assign to cluster 0
             return "0"
     
     artworks["cluster"] = artworks["shelfNo"].apply(assign_cluster)
