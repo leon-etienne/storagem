@@ -11,6 +11,8 @@ import pandas as pd
 import torch
 from transformers import AutoModel, AutoTokenizer
 
+#MODEL_NAME = "intfloat/e5-base"
+
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")
