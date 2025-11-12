@@ -33,3 +33,7 @@ Icon?
 *.csv
 *.png
 *.html
+
+# Video making folder
+# /video_making/
+*.mp4
