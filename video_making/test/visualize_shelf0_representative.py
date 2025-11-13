@@ -48,6 +48,7 @@ FONT_REGULAR = FONT_DIR / "Neue Haas Unica W1G Regular.ttf"
 FONT_LIGHT = FONT_DIR / "Neue Haas Unica W1G Light.ttf"
 FONT_MEDIUM = FONT_DIR / "Neue Haas Unica W1G Medium.ttf"
 FONT_THIN = FONT_DIR / "Neue Haas Unica W1G Thin.ttf"
+FONT_MONO = FONT_DIR / "UbuntuMono-Regular.ttf"  # Monofont for normal text
 FALLBACK_IMAGE = PROJECT_ROOT / "video_making/font/no_image.png"
 CSV_PATH = PROJECT_ROOT / "artworks_with_thumbnails_ting.csv"
 EMBEDDINGS_CACHE = PROJECT_ROOT / "embeddings_cache/all_embeddings.pkl"
@@ -107,6 +108,37 @@ FRAMES_PER_ADDITION = 20  # Frames for each artwork addition animation (slower)
 FPS = 60  # Higher FPS for smoother animation
 
 
+def build_artwork_lookup(df: pd.DataFrame) -> Dict:
+    """Build a fast lookup dictionary for artwork IDs to row indices.
+    
+    Creates mappings for both string and float representations of IDs.
+    Returns dict mapping: id (str/float) -> row_index (int)
+    """
+    lookup = {}
+    for idx, row in df.iterrows():
+        artwork_id = row.get("id")
+        if pd.isna(artwork_id):
+            continue
+        
+        # Add string representation
+        id_str = str(artwork_id).strip()
+        lookup[id_str] = idx
+        
+        # Add normalized string (remove .0)
+        id_str_normalized = id_str.replace('.0', '').strip()
+        if id_str_normalized != id_str:
+            lookup[id_str_normalized] = idx
+        
+        # Add float representation if possible
+        try:
+            id_float = float(artwork_id)
+            lookup[id_float] = idx
+        except (ValueError, TypeError):
+            pass
+    
+    return lookup
+
+
 def load_embeddings() -> Dict:
     """Load embeddings from cache."""
     if not EMBEDDINGS_CACHE.exists():
@@ -120,58 +152,86 @@ def load_embeddings() -> Dict:
     return embeddings_dict
 
 
+# Image cache for performance
+_image_cache: Dict[str, Optional[Image.Image]] = {}
+
 def load_image(image_path: str) -> Optional[Image.Image]:
-    """Load image from path, with fallback."""
+    """Load image from path, with fallback and caching."""
+    # Normalize path for cache key
+    cache_key = str(image_path) if image_path else "N/A"
+    
+    # Check cache first
+    if cache_key in _image_cache:
+        cached_img = _image_cache[cache_key]
+        # Return a copy since images might be modified (resized, etc.)
+        if cached_img is not None:
+            return cached_img.copy()
+        return None
+    
+    result = None
+    
     if pd.isna(image_path) or not image_path or image_path == "N/A":
         if FALLBACK_IMAGE.exists():
             # Keep transparency for fallback image (it's a transparent PNG)
             fallback_img = Image.open(FALLBACK_IMAGE)
             if fallback_img.mode == "RGBA":
-                return fallback_img  # Keep RGBA for transparent images
-            return fallback_img.convert("RGB")
-        return None
-    
-    # Try direct path (absolute or relative to project root)
-    full_path = Path(image_path)
-    if not full_path.is_absolute():
-        full_path = PROJECT_ROOT / image_path
-    
-    if full_path.exists() and full_path.is_file():
-        try:
-            loaded_img = Image.open(full_path)
-            # Keep transparency if it's RGBA, otherwise convert to RGB
-            if loaded_img.mode == "RGBA":
-                return loaded_img
-            return loaded_img.convert("RGB")
-        except Exception:
-            pass
-    
-    # Try extracting filename
-    if "images/" in image_path:
-        filename = image_path.split("images/")[-1]
+                result = fallback_img  # Keep RGBA for transparent images
+            else:
+                result = fallback_img.convert("RGB")
+        else:
+            result = None
     else:
-        filename = image_path
-    
-    images_dir = BASE_DIR / "images"
-    if images_dir.exists():
-        full_path = images_dir / filename
-        if full_path.exists():
+        # Try direct path (absolute or relative to project root)
+        full_path = Path(image_path)
+        if not full_path.is_absolute():
+            full_path = PROJECT_ROOT / image_path
+        
+        if full_path.exists() and full_path.is_file():
             try:
                 loaded_img = Image.open(full_path)
                 # Keep transparency if it's RGBA, otherwise convert to RGB
                 if loaded_img.mode == "RGBA":
-                    return loaded_img
-                return loaded_img.convert("RGB")
+                    result = loaded_img
+                else:
+                    result = loaded_img.convert("RGB")
             except Exception:
                 pass
+        
+        # Try extracting filename
+        if result is None:
+            if "images/" in image_path:
+                filename = image_path.split("images/")[-1]
+            else:
+                filename = image_path
+            
+            images_dir = BASE_DIR / "images"
+            if images_dir.exists():
+                full_path = images_dir / filename
+                if full_path.exists():
+                    try:
+                        loaded_img = Image.open(full_path)
+                        # Keep transparency if it's RGBA, otherwise convert to RGB
+                        if loaded_img.mode == "RGBA":
+                            result = loaded_img
+                        else:
+                            result = loaded_img.convert("RGB")
+                    except Exception:
+                        pass
+        
+        # Fallback
+        if result is None and FALLBACK_IMAGE.exists():
+            # Keep transparency for fallback image (it's a transparent PNG)
+            fallback_img = Image.open(FALLBACK_IMAGE)
+            if fallback_img.mode == "RGBA":
+                result = fallback_img  # Keep RGBA for transparent images
+            else:
+                result = fallback_img.convert("RGB")
     
-    # Fallback
-    if FALLBACK_IMAGE.exists():
-        # Keep transparency for fallback image (it's a transparent PNG)
-        fallback_img = Image.open(FALLBACK_IMAGE)
-        if fallback_img.mode == "RGBA":
-            return fallback_img  # Keep RGBA for transparent images
-        return fallback_img.convert("RGB")
+    # Cache the result
+    _image_cache[cache_key] = result
+    # Return a copy since images might be modified (resized, etc.)
+    if result is not None:
+        return result.copy()
     return None
 
 
@@ -289,13 +349,35 @@ def get_colors(white_bg: bool = False) -> Dict[str, Tuple[int, int, int]]:
         }
 
 
-def get_font(size: int, weight: str = "regular") -> ImageFont.FreeTypeFont:
-    """Load font with fallback.
+# Font cache for performance
+_font_cache: Dict[Tuple[int, str], ImageFont.FreeTypeFont] = {}
+
+def get_font(size: int, weight: str = "regular", mono: bool = False) -> ImageFont.FreeTypeFont:
+    """Load font with fallback and caching.
     
     Args:
         size: Font size in points
         weight: Font weight - "thin", "light", "regular", or "medium"
+        mono: If True, use monofont (UbuntuMono) instead of Neue Haas Unica
     """
+    # Check cache first
+    cache_key = (size, weight.lower(), mono)
+    if cache_key in _font_cache:
+        return _font_cache[cache_key]
+    
+    # Use monofont if requested
+    if mono:
+        font = None
+        try:
+            if FONT_MONO.exists():
+                font = ImageFont.truetype(str(FONT_MONO), size)
+        except Exception:
+            pass
+        if font is None:
+            font = ImageFont.load_default()
+        _font_cache[cache_key] = font
+        return font
+    
     font_paths = {
         "thin": FONT_THIN,
         "light": FONT_LIGHT,
@@ -305,22 +387,28 @@ def get_font(size: int, weight: str = "regular") -> ImageFont.FreeTypeFont:
     
     # Try the requested weight first
     font_path = font_paths.get(weight.lower(), FONT_REGULAR)
+    font = None
     try:
         if font_path.exists():
-            return ImageFont.truetype(str(font_path), size)
+            font = ImageFont.truetype(str(font_path), size)
     except Exception:
         pass
     
     # Fallback to regular if requested weight not available
-    if weight.lower() != "regular":
+    if font is None and weight.lower() != "regular":
         try:
             if FONT_REGULAR.exists():
-                return ImageFont.truetype(str(FONT_REGULAR), size)
+                font = ImageFont.truetype(str(FONT_REGULAR), size)
         except Exception:
             pass
     
     # Final fallback to system default
-    return ImageFont.load_default()
+    if font is None:
+        font = ImageFont.load_default()
+    
+    # Cache the font
+    _font_cache[cache_key] = font
+    return font
 
 
 def draw_artwork_title(draw, title: str, panel_x: int, y_pos: int, max_width: int,
@@ -382,15 +470,17 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
                           distances: Optional[np.ndarray] = None,
                           shelf0_mask: Optional[np.ndarray] = None,
                           shelf0_indices: Optional[np.ndarray] = None,
-                          scale: float = 1.0) -> int:
+                          scale: float = 1.0,
+                          show_raw_embedding: bool = True) -> int:
     """Draw remaining fields in two-column layout.
     
-    Left column: ID, Size, Handling Status, Raw Embedding
+    Left column: ID, Size, Handling Status, Raw Embedding (optional)
     Right column: Delivery Date, Weight, Distance to Centroid
     
     Args:
         max_width: Maximum width available for the panel (e.g., PANEL_WIDTH_SCALED - 60 or CANVAS_WIDTH_SCALED - panel_x - 20)
         scale: Scaling factor for supersampling
+        show_raw_embedding: If False, skip drawing Raw Embedding field
     
     Returns:
         Updated y_pos after drawing all fields
@@ -402,12 +492,16 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
     max_col_width = max_width // 2 - int(10 * scale)
     
     # Left column
+    # Use whiter color for labels, monofont for content
+    font_label_white = get_font(int(FONT_SIZE_SMALL * scale), "thin")  # Label font (not mono, whiter)
+    font_content = get_font(int(FONT_SIZE_TABLE * scale), "thin", mono=True)  # Content font (mono)
+    
     # ID
     try:
         artwork_id_int = int(float(artwork.get("id", "N/A")))
-        draw.text((col1_x, col_y), "ID", fill=colors["text"], font=font_small)
+        draw.text((col1_x, col_y), "ID", fill=colors["text"], font=font_label_white)  # Whiter label
         col_y += int(18 * scale)
-        draw.text((col1_x, col_y), f"{artwork_id_int}", fill=colors["text"], font=font_side)
+        draw.text((col1_x, col_y), f"{artwork_id_int}", fill=colors["text"], font=font_content)  # Monofont content
         col_y += int(25 * scale)
     except (ValueError, TypeError):
         pass
@@ -415,28 +509,28 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
     # Size
     size = str(artwork.get("size", "N/A"))
     if size and size != "N/A" and size != "nan":
-        draw.text((col1_x, col_y), "Size", fill=colors["text"], font=font_small)
+        draw.text((col1_x, col_y), "Size", fill=colors["text"], font=font_label_white)  # Whiter label
         col_y += int(18 * scale)
-        size_bbox = draw.textbbox((0, 0), size, font=font_side)
+        size_bbox = draw.textbbox((0, 0), size, font=font_content)
         if size_bbox[2] - size_bbox[0] > max_col_width:
-            while size and draw.textbbox((0, 0), size + "...", font=font_side)[2] > max_col_width:
+            while size and draw.textbbox((0, 0), size + "...", font=font_content)[2] > max_col_width:
                 size = size[:-1]
             size = size + "..." if size else "..."
-        draw.text((col1_x, col_y), size, fill=colors["text"], font=font_side)
+        draw.text((col1_x, col_y), size, fill=colors["text"], font=font_content)  # Monofont content
         col_y += int(25 * scale)
     
     # Handling Status
     handling_status = str(artwork.get("handling_status", "N/A"))
     if handling_status and handling_status != "N/A" and handling_status != "nan":
-        draw.text((col1_x, col_y), "Handling Status", fill=colors["text"], font=font_small)
+        draw.text((col1_x, col_y), "Handling Status", fill=colors["text"], font=font_label_white)  # Whiter label
         col_y += int(18 * scale)
-        draw.text((col1_x, col_y), handling_status, fill=colors["text"], font=font_side)
+        draw.text((col1_x, col_y), handling_status, fill=colors["text"], font=font_content)  # Monofont content
         col_y += int(25 * scale)
     
-    # Raw Embedding
-    if all_embeddings is not None and artwork_idx is not None and artwork_idx < len(all_embeddings):
+    # Raw Embedding (only show if show_raw_embedding is True)
+    if show_raw_embedding and all_embeddings is not None and artwork_idx is not None and artwork_idx < len(all_embeddings):
         emb = all_embeddings[artwork_idx]
-        draw.text((col1_x, col_y), "Raw Embedding", fill=colors["text"], font=font_small)
+        draw.text((col1_x, col_y), "Raw Embedding", fill=colors["text"], font=font_label_white)  # Whiter label
         col_y += int(18 * scale)
         emb_preview = emb[:8] if len(emb) > 8 else emb
         emb_str = ", ".join([f"{v:.3f}" for v in emb_preview])
@@ -447,7 +541,7 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
         current_line = ""
         for word in emb_words:
             test_line = current_line + (", " if current_line else "") + word
-            bbox = draw.textbbox((0, 0), test_line, font=font_side)
+            bbox = draw.textbbox((0, 0), test_line, font=font_content)
             if bbox[2] - bbox[0] <= max_col_width:
                 current_line = test_line
             else:
@@ -457,7 +551,7 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
         if current_line:
             emb_lines.append(current_line)
         for line in emb_lines[:2]:  # Max 2 lines
-            draw.text((col1_x, col_y), line, fill=colors["text"], font=font_side)
+            draw.text((col1_x, col_y), line, fill=colors["text"], font=font_content)  # Monofont content
             col_y += int(18 * scale)
         col_y += int(8 * scale)
     
@@ -467,17 +561,17 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
     # Delivery Date
     delivery_date = str(artwork.get("deliveryDate", "N/A"))
     if delivery_date and delivery_date != "N/A" and delivery_date != "nan":
-        draw.text((col2_x, col_y_right), "Delivery Date", fill=colors["text"], font=font_small)
+        draw.text((col2_x, col_y_right), "Delivery Date", fill=colors["text"], font=font_label_white)  # Whiter label
         col_y_right += int(18 * scale)
-        draw.text((col2_x, col_y_right), delivery_date, fill=colors["text"], font=font_side)
+        draw.text((col2_x, col_y_right), delivery_date, fill=colors["text"], font=font_content)  # Monofont content
         col_y_right += int(25 * scale)
     
     # Weight
     weight = str(artwork.get("weight", "N/A"))
     if weight and weight != "N/A" and weight != "nan":
-        draw.text((col2_x, col_y_right), "Weight", fill=colors["text"], font=font_small)
+        draw.text((col2_x, col_y_right), "Weight", fill=colors["text"], font=font_label_white)  # Whiter label
         col_y_right += int(18 * scale)
-        draw.text((col2_x, col_y_right), weight, fill=colors["text"], font=font_side)
+        draw.text((col2_x, col_y_right), weight, fill=colors["text"], font=font_content)  # Monofont content
         col_y_right += int(25 * scale)
     
     # Distance
@@ -487,9 +581,9 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
             shelf0_idx = list(shelf0_indices_arr).index(artwork_idx)
             if shelf0_idx < len(distances):
                 distance = distances[shelf0_idx]
-                draw.text((col2_x, col_y_right), "Distance to Centroid", fill=colors["text"], font=font_small)
+                draw.text((col2_x, col_y_right), "Distance to Centroid", fill=colors["text"], font=font_label_white)  # Whiter label
                 col_y_right += int(18 * scale)
-                draw.text((col2_x, col_y_right), f"{distance:.4f}", fill=colors["lime"], font=font_side)
+                draw.text((col2_x, col_y_right), f"{distance:.4f}", fill=colors["lime"], font=font_content)  # Monofont content
                 col_y_right += int(25 * scale)
     
     # Return max of both columns
@@ -528,6 +622,7 @@ def create_frame(
     current_distance: Optional[float] = None,  # Current distance being displayed
     search_mode: Optional[str] = None,  # "representative" or "outlier"
     supersample_factor: float = 2.0,  # Supersampling factor for anti-aliasing (1.0 = no supersampling, 2.0 = 2x resolution)
+    artwork_lookup: Optional[Dict] = None,  # Pre-computed lookup dict for artwork data (id -> row index or row data)
 ) -> Image.Image:
     """Create a single frame for the visualization."""
     # Validate representative_idx - if it's a DataFrame or invalid, set to None
@@ -584,8 +679,8 @@ def create_frame(
     # Load fonts with appropriate weights - scale font sizes for supersampled canvas
     font_title = get_font(int(FONT_SIZE_TITLE * scale), "medium")  # Medium for titles to stand out
     font_label = get_font(int(FONT_SIZE_LABEL * scale), "thin")  # Thin for labels
-    font_info = get_font(int(FONT_SIZE_INFO * scale), "thin")  # Thin for info text
-    font_small = get_font(int(FONT_SIZE_SMALL * scale), "thin")  # Thin for small text
+    font_info = get_font(int(FONT_SIZE_INFO * scale), "thin", mono=True)  # Monofont for info text
+    font_small = get_font(int(FONT_SIZE_SMALL * scale), "thin", mono=True)  # Monofont for small text
     
     # Draw step label (subtitle) at top
     step_labels = {
@@ -654,7 +749,8 @@ def create_frame(
         except (ValueError, TypeError, IndexError, AttributeError):
             pass
     
-    draw.text((50 * scale, 60 * scale), step_text, fill=colors["text_secondary"], font=font_label)
+    # Subtitle should be white (not grey)
+    draw.text((50 * scale, 60 * scale), step_text, fill=colors["text"], font=font_label)
     
     # Draw title at left side, higher up
     title_text = f"Regal {target_shelf}"
@@ -669,16 +765,31 @@ def create_frame(
         draw.rectangle([MAP_WIDTH_SCALED, 0, CANVAS_WIDTH_SCALED, CANVAS_HEIGHT_SCALED], fill=colors["background"])
     
     # Draw divider line - draw AFTER panel background
-    draw.line([(MAP_WIDTH_SCALED, 0), (MAP_WIDTH_SCALED, CANVAS_HEIGHT_SCALED)], fill=colors["text"], width=LINE_WIDTH_SCALED * 2)
+    draw.line([(MAP_WIDTH_SCALED, 0), (MAP_WIDTH_SCALED, CANVAS_HEIGHT_SCALED)], fill=colors["text"], width=int(LINE_WIDTH_SCALED * 2))
     
     # Draw all points (fill, no stroke for non-Regal items) with lower opacity
     # In "all" step, draw ALL points as gray (including Regal ones)
+    # In "highlight_slow" step, draw Regal points as gray first (they'll transition to green)
     # In other steps, only draw non-Regal points as gray (Regal ones will be drawn as green later)
     for i, (x, y) in enumerate(all_coords):
         if step == "all":
             # In "all" step, draw everything as gray
             draw.ellipse([x - POINT_SIZE_SCALED, y - POINT_SIZE_SCALED, x + POINT_SIZE_SCALED, y + POINT_SIZE_SCALED],
                        fill=colors["point_low_opacity"], outline=None, width=0)
+        elif step == "highlight_slow" and shelf0_mask[i]:
+            # In highlight_slow step, draw Regal points as gray first (they'll transition to green)
+            # Get the index in shelf0_indices to check if this should be shown as gray
+            shelf0_indices = np.where(shelf0_mask)[0]
+            shelf0_indices_list = list(shelf0_indices)
+            if i in shelf0_indices_list:
+                idx_in_shelf0 = shelf0_indices_list.index(i)
+                # Draw as gray if not yet shown (beyond num_shelf0_shown)
+                # The green dots will be drawn later in the code, so we need to draw gray for all items
+                # that haven't been identified yet
+                if num_shelf0_shown is None or idx_in_shelf0 >= num_shelf0_shown:
+                    # Draw as gray (not yet identified - will transition to green)
+                    draw.ellipse([x - POINT_SIZE_SCALED, y - POINT_SIZE_SCALED, x + POINT_SIZE_SCALED, y + POINT_SIZE_SCALED],
+                               fill=colors["point_low_opacity"], outline=None, width=0)
         elif not shelf0_mask[i]:
             # In other steps, only draw non-Regal points as gray
             draw.ellipse([x - POINT_SIZE_SCALED, y - POINT_SIZE_SCALED, x + POINT_SIZE_SCALED, y + POINT_SIZE_SCALED],
@@ -711,7 +822,7 @@ def create_frame(
                     for j in range(i + 1, min(num_to_show, len(coords_to_use))):
                         x1, y1 = coords_to_use[i]
                         x2, y2 = coords_to_use[j]
-                        draw.line([(x1, y1), (x2, y2)], fill=line_color, width=LINE_WIDTH_SCALED)
+                        draw.line([(x1, y1), (x2, y2)], fill=line_color, width=int(LINE_WIDTH_SCALED))
     
     # Extract centroid coordinates (needed for lines)
     cx, cy = None, None
@@ -750,10 +861,10 @@ def create_frame(
                     # In "representative" step, use green for lines being drawn
                     if step == "representative":
                         line_color = colors["lime"]
-                        line_width = 3  # Thicker line for representative step
+                        line_width = int(3 * scale)  # Thicker line for representative step, scaled
                     else:
                         line_color = colors["connection"]
-                        line_width = LINE_WIDTH_SCALED
+                        line_width = int(LINE_WIDTH_SCALED)
                     draw.line([(x1, y1), (inter_x, inter_y)], fill=line_color, width=line_width)
                     
                     # Add small numbers on the side of the line (for representative step)
@@ -767,24 +878,24 @@ def create_frame(
                         dy = inter_y - y1
                         length = np.sqrt(dx*dx + dy*dy)
                         if length > 0:
-                            perp_x = -dy / length * 15  # 15px offset
-                            perp_y = dx / length * 15
+                            perp_x = -dy / length * 15 * scale  # 15px offset, scaled
+                            perp_y = dx / length * 15 * scale
                             num_x = int(mid_x + perp_x)
                             num_y = int(mid_y + perp_y)
                             
-                            # Draw distance number in small font
+                            # Draw distance number in small font (properly scaled)
                             if current_distance is not None:
-                                font_small_num = get_font(int(12 * scale), "thin")
+                                font_small_num = get_font(int(12 * scale), "thin", mono=True)  # Monofont for numbers
                                 num_text = f"{current_distance:.3f}"
-                                # Draw with background for readability
-                                bbox = draw.textbbox((num_x, num_y), num_text, font=font_small_num)
+                                # Draw with background for readability (properly scaled)
+                                bbox = draw.textbbox((int(num_x), int(num_y)), num_text, font=font_small_num)
                                 padding = int(2 * scale)
                                 draw.rectangle(
-                                    [bbox[0] - padding, bbox[1] - padding,
-                                     bbox[2] + padding, bbox[3] + padding],
+                                    [int(bbox[0] - padding), int(bbox[1] - padding),
+                                     int(bbox[2] + padding), int(bbox[3] + padding)],
                                     fill=colors["background"], outline=None
                                 )
-                                draw.text((num_x, num_y), num_text, fill=colors["lime"], font=font_small_num)
+                                draw.text((int(num_x), int(num_y)), num_text, fill=colors["lime"], font=font_small_num)
         else:
             # Draw lines from centroid to Regal 0 points (gray on black - less obvious)
             # Only draw grey lines in highlight/centroid/distances steps, not after
@@ -808,7 +919,7 @@ def create_frame(
                     
                     for i in range(min(num_to_show, len(coords_to_use))):
                         x, y = coords_to_use[i]
-                        draw.line([(cx, cy), (x, y)], fill=line_color, width=LINE_WIDTH_SCALED)
+                        draw.line([(cx, cy), (x, y)], fill=line_color, width=int(LINE_WIDTH_SCALED))
     
     # Draw expanding gray circle for highlight_slow and highlight steps (BEFORE green circle)
     if step in ["highlight_slow", "highlight"] and highlighted_artwork_idx is not None and shelf0_coords is not None and circle_expand_progress is not None:
@@ -859,11 +970,11 @@ def create_frame(
         # In highlight step, show all items that have been identified
         # IMPORTANT: Only iterate up to num_dots_to_show to prevent showing too many items
         for i, (x, y) in enumerate(coords_for_dots[:num_dots_to_show]):
-            # In highlight_slow step, we've already limited to num_dots_to_show, so no need for additional check
-            # But keep the check for safety
+            # In highlight_slow step, show all items up to num_shelf0_shown (they accumulate and stay green)
             if step == "highlight_slow":
+                # Show all items that have been identified so far (up to num_shelf0_shown)
                 if i >= num_shelf0_shown:
-                    continue  # Skip items not yet identified (shouldn't happen due to slice, but keep for safety)
+                    continue  # Skip items not yet identified
             elif i >= num_dots_to_show:
                 continue  # Skip items beyond what should be shown (shouldn't happen due to slice, but keep for safety)
             
@@ -889,16 +1000,16 @@ def create_frame(
                 current_color = colors["lime"]
             else:
                 # In "highlight" step, ALL previously identified items should stay full green
-                # In "highlight_slow" step, previously identified items (i < num_shelf0_shown - 1) should also stay full green
+                # In "highlight_slow" step, ALL identified items (i < num_shelf0_shown) should stay full green
+                # This includes the currently appearing item after easing is done
                 if step == "highlight":
                     # In highlight step, show all items that have been identified (all should be full green)
                     current_color = colors["lime"]
-                elif step == "highlight_slow" and i < num_shelf0_shown - 1:
-                    # In highlight_slow step, previously identified items stay fully green
+                elif step == "highlight_slow" and i < num_shelf0_shown:
+                    # In highlight_slow step, ALL identified items (including current one after easing) stay fully green
                     current_color = colors["lime"]
                 else:
-                    # This should not happen in highlight_slow - all items up to num_shelf0_shown should be shown
-                    # But if it does, use low opacity
+                    # Item not yet identified
                     current_color = colors["lime_low_opacity"]
             
             draw.ellipse([x - POINT_SIZE_LARGE_SCALED, y - POINT_SIZE_LARGE_SCALED, 
@@ -907,6 +1018,7 @@ def create_frame(
         
         # Draw title text for Regal items
         # In highlight_slow step, show text for all identified items (they stay visible once identified)
+        # This includes the currently appearing item - text appears when item turns green
         # In highlight step, show text for all items (all identified items)
         # In other steps, show text for all items
         if shelf0_coords is not None and df is not None:
@@ -914,6 +1026,7 @@ def create_frame(
             # Determine how many items to show text for
             if step == "highlight_slow" and num_shelf0_shown is not None:
                 # In identify step, show text for all items that have been identified (0 to num_shelf0_shown - 1)
+                # This includes the currently appearing item (at index num_shelf0_shown - 1)
                 num_text_to_show = num_shelf0_shown
                 text_indices_to_show = list(range(num_text_to_show))
             elif step == "highlight":
@@ -1009,9 +1122,11 @@ def create_frame(
             highlight_idx_in_shelf0 = shelf0_indices_list.index(highlight_idx_check)
             if highlight_idx_in_shelf0 < len(shelf0_coords):
                 hx, hy = shelf0_coords[highlight_idx_in_shelf0]
-                # Draw gray circle around highlighted artwork (not black)
-                draw.ellipse([hx - 20, hy - 20, hx + 20, hy + 20],
-                            fill=None, outline=colors["circle_gray"], width=2)
+                # Draw gray circle around highlighted artwork (not black) - properly scaled
+                circle_radius = int(20 * scale)
+                draw.ellipse([int(hx - circle_radius), int(hy - circle_radius), 
+                            int(hx + circle_radius), int(hy + circle_radius)],
+                            fill=None, outline=colors["circle_gray"], width=int(2 * scale))
     
     # Highlight representative (if different from highlighted)
     if representative_idx is not None and shelf0_coords is not None:
@@ -1063,9 +1178,11 @@ def create_frame(
                 rep_idx_in_shelf0 = shelf0_indices_list.index(rep_idx)
                 if rep_idx_in_shelf0 < len(shelf0_coords):
                     rx, ry = shelf0_coords[rep_idx_in_shelf0]
-                    # Draw larger bright green circle around representative
-                    draw.ellipse([rx - 15, ry - 15, rx + 15, ry + 15],
-                                fill=None, outline=colors["lime"], width=3)
+                    # Draw larger bright green circle around representative - properly scaled
+                    circle_radius = int(15 * scale)
+                    draw.ellipse([int(rx - circle_radius), int(ry - circle_radius), 
+                                int(rx + circle_radius), int(ry + circle_radius)],
+                                fill=None, outline=colors["lime"], width=int(3 * scale))
     
     # Mark all top 10 representatives with bright green (if not in representatives step)
     # Skip items that are already marked as the main representative to avoid duplicate circles
@@ -1096,41 +1213,69 @@ def create_frame(
                 idx_in_shelf0 = list(shelf0_indices).index(artwork_idx_in_all)
                 if idx_in_shelf0 < len(shelf0_coords):
                     x, y = shelf0_coords[idx_in_shelf0]
-                    # Draw bright green circle around representative
-                    draw.ellipse([x - 12, y - 12, x + 12, y + 12],
-                                fill=None, outline=colors["lime"], width=2)
+                    # Draw bright green circle around representative - properly scaled
+                    circle_radius = int(12 * scale)
+                    draw.ellipse([int(x - circle_radius), int(y - circle_radius), 
+                                int(x + circle_radius), int(y + circle_radius)],
+                                fill=None, outline=colors["lime"], width=int(2 * scale))
     
     # Draw calculation info panel content (text and images) - draw LAST so it's on top
     if highlighted_artwork_idx is not None and df is not None:
         # Find artwork in dataframe
         try:
             artwork_id = all_artwork_ids[highlighted_artwork_idx]
-            # Try multiple ways to match the ID (handle both string and float)
-            artwork_row = pd.DataFrame()
-            try:
-                # Try exact match with float
-                artwork_row = df[df["id"].astype(float) == float(artwork_id)]
-            except (ValueError, TypeError):
-                pass
+            artwork = None
             
-            if artwork_row.empty:
-                # Try string match
+            # Use pre-computed lookup if available (much faster)
+            if artwork_lookup is not None:
+                artwork_id_str = str(artwork_id).strip()
+                artwork_id_normalized = artwork_id_str.replace('.0', '').strip()
+                artwork_id_float = None
                 try:
-                    artwork_row = df[df["id"].astype(str).str.strip() == str(artwork_id).strip()]
+                    artwork_id_float = float(artwork_id)
                 except (ValueError, TypeError):
                     pass
-            
-            if artwork_row.empty:
-                # Try removing .0 from float strings
+                
+                # Try multiple lookup keys
+                lookup_idx = None
+                if artwork_id_str in artwork_lookup:
+                    lookup_idx = artwork_lookup[artwork_id_str]
+                elif artwork_id_normalized in artwork_lookup:
+                    lookup_idx = artwork_lookup[artwork_id_normalized]
+                elif artwork_id_float is not None and artwork_id_float in artwork_lookup:
+                    lookup_idx = artwork_lookup[artwork_id_float]
+                
+                if lookup_idx is not None:
+                    artwork = df.iloc[lookup_idx]
+            else:
+                # Fallback to original lookup method
+                artwork_row = pd.DataFrame()
                 try:
-                    artwork_row = df[df["id"].astype(str).str.replace('.0', '', regex=False).str.strip() == str(artwork_id).strip()]
+                    # Try exact match with float
+                    artwork_row = df[df["id"].astype(float) == float(artwork_id)]
                 except (ValueError, TypeError):
                     pass
+                
+                if artwork_row.empty:
+                    # Try string match
+                    try:
+                        artwork_row = df[df["id"].astype(str).str.strip() == str(artwork_id).strip()]
+                    except (ValueError, TypeError):
+                        pass
+                
+                if artwork_row.empty:
+                    # Try removing .0 from float strings
+                    try:
+                        artwork_row = df[df["id"].astype(str).str.replace('.0', '', regex=False).str.strip() == str(artwork_id).strip()]
+                    except (ValueError, TypeError):
+                        pass
+                
+                if not artwork_row.empty:
+                    artwork = artwork_row.iloc[0]
         except (IndexError, KeyError, TypeError) as e:
-            artwork_row = pd.DataFrame()
+            artwork = None
         
-        if not artwork_row.empty:
-            artwork = artwork_row.iloc[0]
+        if artwork is not None:
             # Note: Panel background already drawn earlier
             
             # Draw thumbnail at the very top first - standardized layout
@@ -1154,16 +1299,16 @@ def create_frame(
                 img_x = MAP_WIDTH_SCALED + (PANEL_WIDTH_SCALED - image.width) // 2
                 # Paste image - need to use alpha composite if image has alpha, otherwise direct paste
                 if image.mode == 'RGBA':
-                    img.paste(image, (img_x, y_pos), image)
+                    img.paste(image, (int(img_x), int(y_pos)), image)
                 else:
-                    img.paste(image, (img_x, y_pos))
+                    img.paste(image, (int(img_x), int(y_pos)))
                 y_pos += image.height + 20 * scale  # Standardized spacing
             else:
                 y_pos += 20 * scale
             
             # Draw divider line after image - standardized spacing
             draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
-                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+                     fill=colors["text"], width=int(LINE_WIDTH_SCALED))
             y_pos += 20 * scale  # Standardized spacing
             
             # Standardized font sizes
@@ -1188,13 +1333,14 @@ def create_frame(
                 artist = artist + "..." if artist else "..."
             draw.text((panel_x, y_pos), artist, fill=colors["text"], font=font_artist)
             y_pos += 22 * scale  # Standardized spacing
-            # Year with standardized font
-            draw.text((panel_x, y_pos), year, fill=colors["text"], font=font_section)
+            # Year with standardized font (use monofont for content)
+            font_year = get_font(int(FONT_SIZE_TABLE * scale), "thin", mono=True)  # Monofont for year
+            draw.text((panel_x, y_pos), year, fill=colors["text"], font=font_year)
             y_pos += 25 * scale  # Standardized spacing
             
             # Divider before two-column fields - standardized layout
             draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
-                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+                     fill=colors["text"], width=int(LINE_WIDTH_SCALED))
             y_pos += 20 * scale  # Standardized spacing
             
             # Two column layout for remaining fields - standardized layout (distance included here)
@@ -1214,9 +1360,12 @@ def create_frame(
             if description and description != "nan" and description.strip():
                 y_pos += 10 * scale  # Standardized spacing
                 draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
-                         fill=colors["text"], width=LINE_WIDTH_SCALED)
+                         fill=colors["text"], width=int(LINE_WIDTH_SCALED))
                 y_pos += 20 * scale  # Standardized spacing
-                draw.text((panel_x, y_pos), "Description", fill=colors["text"], font=font_small)
+                # Label should be whiter, content should be monofont
+                font_label_desc = get_font(int(FONT_SIZE_SMALL * scale), "thin")  # Label (not mono, whiter)
+                font_content_desc = get_font(int(FONT_SIZE_SMALL * scale), "thin", mono=True)  # Content (mono)
+                draw.text((panel_x, y_pos), "Description", fill=colors["text"], font=font_label_desc)
                 y_pos += 20 * scale  # Standardized spacing
                 max_width = PANEL_WIDTH_SCALED - 60 * scale
                 words = description.split()
@@ -1224,7 +1373,7 @@ def create_frame(
                 current_line = ""
                 for word in words:
                     test_line = current_line + (" " if current_line else "") + word
-                    bbox = draw.textbbox((0, 0), test_line, font=font_small)
+                    bbox = draw.textbbox((0, 0), test_line, font=font_content_desc)
                     if bbox[2] - bbox[0] <= max_width:
                         current_line = test_line
                     else:
@@ -1235,7 +1384,7 @@ def create_frame(
                     lines.append(current_line)
                 
                 for line in lines[:6]:  # Limit to 6 lines
-                    draw.text((panel_x, y_pos), line, fill=colors["text"], font=font_small)
+                    draw.text((panel_x, y_pos), line, fill=colors["text"], font=font_content_desc)
                     y_pos += 18 * scale  # Standardized spacing
                 y_pos += 15 * scale  # Standardized spacing
             
@@ -1243,9 +1392,11 @@ def create_frame(
             internal_note = str(artwork.get("internalNote", ""))
             if internal_note and internal_note != "nan" and internal_note.strip():
                 draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
-                         fill=colors["text"], width=LINE_WIDTH_SCALED)
+                         fill=colors["text"], width=int(LINE_WIDTH_SCALED))
                 y_pos += 20 * scale  # Standardized spacing
-                draw.text((panel_x, y_pos), "Internal Note", fill=colors["text"], font=font_small)
+                font_label_note = get_font(int(FONT_SIZE_SMALL * scale), "thin")  # Label (not mono, whiter)
+                font_content_note = get_font(int(FONT_SIZE_SMALL * scale), "thin", mono=True)  # Content (mono)
+                draw.text((panel_x, y_pos), "Internal Note", fill=colors["text"], font=font_label_note)
                 y_pos += 20 * scale  # Standardized spacing
                 max_width = PANEL_WIDTH_SCALED - 60 * scale
                 words = internal_note.split()
@@ -1253,7 +1404,7 @@ def create_frame(
                 current_line = ""
                 for word in words:
                     test_line = current_line + (" " if current_line else "") + word
-                    bbox = draw.textbbox((0, 0), test_line, font=font_small)
+                    bbox = draw.textbbox((0, 0), test_line, font=font_content_note)
                     if bbox[2] - bbox[0] <= max_width:
                         current_line = test_line
                     else:
@@ -1264,7 +1415,7 @@ def create_frame(
                     lines.append(current_line)
                 
                 for line in lines[:4]:  # Limit to 4 lines
-                    draw.text((panel_x, y_pos), line, fill=colors["text"], font=font_small)
+                    draw.text((panel_x, y_pos), line, fill=colors["text"], font=font_content_note)
                     y_pos += 18 * scale  # Standardized spacing
     
     # Draw top 10 representatives with images on circles (with easing support)
@@ -1301,12 +1452,35 @@ def create_frame(
                     if df is not None:
                         try:
                             artwork_id = all_artwork_ids[artwork_idx_in_all]
-                            artwork_row = df[df["id"].astype(float) == float(artwork_id)]
-                            if artwork_row.empty:
-                                artwork_row = df[df["id"].astype(str).str.strip() == str(artwork_id).strip()]
+                            # Use lookup if available
+                            if artwork_lookup is not None:
+                                artwork_id_str = str(artwork_id).strip()
+                                artwork_id_normalized = artwork_id_str.replace('.0', '').strip()
+                                lookup_idx = None
+                                try:
+                                    artwork_id_float = float(artwork_id)
+                                    if artwork_id_float in artwork_lookup:
+                                        lookup_idx = artwork_lookup[artwork_id_float]
+                                except (ValueError, TypeError):
+                                    pass
+                                if lookup_idx is None and artwork_id_str in artwork_lookup:
+                                    lookup_idx = artwork_lookup[artwork_id_str]
+                                if lookup_idx is None and artwork_id_normalized in artwork_lookup:
+                                    lookup_idx = artwork_lookup[artwork_id_normalized]
+                                if lookup_idx is not None:
+                                    artwork = df.iloc[lookup_idx]
+                                else:
+                                    artwork = None
+                            else:
+                                artwork_row = df[df["id"].astype(float) == float(artwork_id)]
+                                if artwork_row.empty:
+                                    artwork_row = df[df["id"].astype(str).str.strip() == str(artwork_id).strip()]
+                                if not artwork_row.empty:
+                                    artwork = artwork_row.iloc[0]
+                                else:
+                                    artwork = None
                             
-                            if not artwork_row.empty:
-                                artwork = artwork_row.iloc[0]
+                            if artwork is not None:
                                 thumbnail = load_image(artwork.get("thumbnail", ""))
                                 
                                 if thumbnail:
@@ -1521,12 +1695,13 @@ def create_frame(
                     draw.polygon(arrow_points, fill=colors["lime"])
                 
                 # Draw distance label at midpoint of visible line (in green, with better styling)
+                # Animate the appearance of the text box (fade in)
                 if line_progress > 0.3:  # Only show label when line is partially drawn
                     label_x = cx + (tx - cx) * (line_progress * 0.5)
                     label_y = cy + (ty - cy) * (line_progress * 0.5)
                     
                     # Offset label perpendicular to line
-                    label_offset = 35
+                    label_offset = 35 * scale
                     label_x += perp_x * label_offset
                     label_y += perp_y * label_offset
                     
@@ -1534,17 +1709,47 @@ def create_frame(
                     distance_text = f"{target_distance:.4f}"
                     font_ruler = get_font(int(FONT_SIZE_LABEL * scale), "medium")  # Larger, bolder font
                     
+                    # Animate text box appearance (fade in from 0.3 to 0.5 progress)
+                    fade_start = 0.3
+                    fade_end = 0.5
+                    if line_progress < fade_end:
+                        # Calculate fade progress (0.0 to 1.0)
+                        fade_progress = (line_progress - fade_start) / (fade_end - fade_start)
+                        fade_progress = max(0.0, min(1.0, fade_progress))
+                        # Use ease-in-out curve
+                        fade_progress = fade_progress * fade_progress * (3 - 2 * fade_progress)
+                    else:
+                        fade_progress = 1.0
+                    
                     # Draw text with rounded background for better readability
                     bbox = draw.textbbox((int(label_x), int(label_y)), distance_text, font=font_ruler)
                     padding = int(8 * scale)
                     # Draw background rectangle with rounded corners effect (using multiple rectangles)
                     bg_rect = [bbox[0] - padding, bbox[1] - padding, 
                               bbox[2] + padding, bbox[3] + padding]
-                    draw.rectangle(bg_rect, fill=colors["background"], outline=colors["lime"], width=int(2 * scale))
                     
-                    # Draw text on top
+                    # Apply fade to background and outline
+                    bg_alpha = int(255 * fade_progress)
+                    outline_alpha = int(255 * fade_progress)
+                    
+                    # Blend background color with fade
+                    bg_r = int(colors["background"][0] * fade_progress + colors["background"][0] * (1 - fade_progress))
+                    bg_g = int(colors["background"][1] * fade_progress + colors["background"][1] * (1 - fade_progress))
+                    bg_b = int(colors["background"][2] * fade_progress + colors["background"][2] * (1 - fade_progress))
+                    
+                    # For outline, blend lime with background
+                    outline_r = int(colors["lime"][0] * fade_progress + colors["background"][0] * (1 - fade_progress))
+                    outline_g = int(colors["lime"][1] * fade_progress + colors["background"][1] * (1 - fade_progress))
+                    outline_b = int(colors["lime"][2] * fade_progress + colors["background"][2] * (1 - fade_progress))
+                    
+                    draw.rectangle(bg_rect, fill=(bg_r, bg_g, bg_b), outline=(outline_r, outline_g, outline_b), width=int(2 * scale))
+                    
+                    # Draw text on top with fade
+                    text_r = int(colors["lime"][0] * fade_progress + colors["background"][0] * (1 - fade_progress))
+                    text_g = int(colors["lime"][1] * fade_progress + colors["background"][1] * (1 - fade_progress))
+                    text_b = int(colors["lime"][2] * fade_progress + colors["background"][2] * (1 - fade_progress))
                     draw.text((int(label_x), int(label_y)), distance_text, 
-                             fill=colors["lime"], font=font_ruler)
+                             fill=(text_r, text_g, text_b), font=font_ruler)
     
     # Make representative and outlier dots and text more visible during ruler step
     if step == "ruler" and shelf0_coords is not None and df is not None:
@@ -1596,7 +1801,7 @@ def create_frame(
                 # Draw bright green circle around it
                 draw.ellipse([x - RULER_DOT_SIZE_SCALED - 5 * scale, y - RULER_DOT_SIZE_SCALED - 5 * scale, 
                             x + RULER_DOT_SIZE_SCALED + 5 * scale, y + RULER_DOT_SIZE_SCALED + 5 * scale],
-                           fill=None, outline=colors["lime"], width=3 * scale)
+                           fill=None, outline=colors["lime"], width=int(3 * scale))
         
         # Draw larger, more visible text labels for representative and outlier
         if rep_idx_in_shelf0 is not None and rep_idx_in_shelf0 < len(shelf0_coords):
@@ -1666,19 +1871,49 @@ def create_frame(
                     if float(aid) == float(aesthetic_representative_id) or str(aid) == str(aesthetic_representative_id):
                         rep_idx = i
                         rep_id = aid
-                        rep_row = df[df["id"].astype(float) == float(rep_id)]
-                        if rep_row.empty:
-                            rep_row = df[df["id"].astype(str).str.strip() == str(rep_id).strip()]
-                        if not rep_row.empty:
-                            rep_artwork = rep_row.iloc[0]
+                        # Use lookup if available
+                        if artwork_lookup is not None:
+                            rep_id_str = str(rep_id).strip()
+                            rep_id_normalized = rep_id_str.replace('.0', '').strip()
+                            lookup_idx = None
+                            try:
+                                rep_id_float = float(rep_id)
+                                if rep_id_float in artwork_lookup:
+                                    lookup_idx = artwork_lookup[rep_id_float]
+                            except (ValueError, TypeError):
+                                pass
+                            if lookup_idx is None and rep_id_str in artwork_lookup:
+                                lookup_idx = artwork_lookup[rep_id_str]
+                            if lookup_idx is None and rep_id_normalized in artwork_lookup:
+                                lookup_idx = artwork_lookup[rep_id_normalized]
+                            if lookup_idx is not None:
+                                rep_artwork = df.iloc[lookup_idx]
+                        else:
+                            rep_row = df[df["id"].astype(float) == float(rep_id)]
+                            if rep_row.empty:
+                                rep_row = df[df["id"].astype(str).str.strip() == str(rep_id).strip()]
+                            if not rep_row.empty:
+                                rep_artwork = rep_row.iloc[0]
                         break
                 except (ValueError, TypeError):
                     if str(aid) == str(aesthetic_representative_id):
                         rep_idx = i
                         rep_id = aid
-                        rep_row = df[df["id"].astype(str).str.strip() == str(rep_id).strip()]
-                        if not rep_row.empty:
-                            rep_artwork = rep_row.iloc[0]
+                        # Use lookup if available
+                        if artwork_lookup is not None:
+                            rep_id_str = str(rep_id).strip()
+                            rep_id_normalized = rep_id_str.replace('.0', '').strip()
+                            lookup_idx = None
+                            if rep_id_str in artwork_lookup:
+                                lookup_idx = artwork_lookup[rep_id_str]
+                            if lookup_idx is None and rep_id_normalized in artwork_lookup:
+                                lookup_idx = artwork_lookup[rep_id_normalized]
+                            if lookup_idx is not None:
+                                rep_artwork = df.iloc[lookup_idx]
+                        else:
+                            rep_row = df[df["id"].astype(str).str.strip() == str(rep_id).strip()]
+                            if not rep_row.empty:
+                                rep_artwork = rep_row.iloc[0]
                         break
         
         if aesthetic_outlier_id is not None:
@@ -1687,19 +1922,49 @@ def create_frame(
                     if float(aid) == float(aesthetic_outlier_id) or str(aid) == str(aesthetic_outlier_id):
                         outlier_idx = i
                         outlier_id = aid
-                        outlier_row = df[df["id"].astype(float) == float(outlier_id)]
-                        if outlier_row.empty:
-                            outlier_row = df[df["id"].astype(str).str.strip() == str(outlier_id).strip()]
-                        if not outlier_row.empty:
-                            outlier_artwork = outlier_row.iloc[0]
+                        # Use lookup if available
+                        if artwork_lookup is not None:
+                            outlier_id_str = str(outlier_id).strip()
+                            outlier_id_normalized = outlier_id_str.replace('.0', '').strip()
+                            lookup_idx = None
+                            try:
+                                outlier_id_float = float(outlier_id)
+                                if outlier_id_float in artwork_lookup:
+                                    lookup_idx = artwork_lookup[outlier_id_float]
+                            except (ValueError, TypeError):
+                                pass
+                            if lookup_idx is None and outlier_id_str in artwork_lookup:
+                                lookup_idx = artwork_lookup[outlier_id_str]
+                            if lookup_idx is None and outlier_id_normalized in artwork_lookup:
+                                lookup_idx = artwork_lookup[outlier_id_normalized]
+                            if lookup_idx is not None:
+                                outlier_artwork = df.iloc[lookup_idx]
+                        else:
+                            outlier_row = df[df["id"].astype(float) == float(outlier_id)]
+                            if outlier_row.empty:
+                                outlier_row = df[df["id"].astype(str).str.strip() == str(outlier_id).strip()]
+                            if not outlier_row.empty:
+                                outlier_artwork = outlier_row.iloc[0]
                         break
                 except (ValueError, TypeError):
                     if str(aid) == str(aesthetic_outlier_id):
                         outlier_idx = i
                         outlier_id = aid
-                        outlier_row = df[df["id"].astype(str).str.strip() == str(outlier_id).strip()]
-                        if not outlier_row.empty:
-                            outlier_artwork = outlier_row.iloc[0]
+                        # Use lookup if available
+                        if artwork_lookup is not None:
+                            outlier_id_str = str(outlier_id).strip()
+                            outlier_id_normalized = outlier_id_str.replace('.0', '').strip()
+                            lookup_idx = None
+                            if outlier_id_str in artwork_lookup:
+                                lookup_idx = artwork_lookup[outlier_id_str]
+                            if lookup_idx is None and outlier_id_normalized in artwork_lookup:
+                                lookup_idx = artwork_lookup[outlier_id_normalized]
+                            if lookup_idx is not None:
+                                outlier_artwork = df.iloc[lookup_idx]
+                        else:
+                            outlier_row = df[df["id"].astype(str).str.strip() == str(outlier_id).strip()]
+                            if not outlier_row.empty:
+                                outlier_artwork = outlier_row.iloc[0]
                         break
         
         # Representative section (top half of right side) - standardized layout
@@ -1725,16 +1990,16 @@ def create_frame(
                 img_x = MAP_WIDTH_SCALED + (PANEL_WIDTH_SCALED - rep_image.width) // 2
                 # Paste image - need to use alpha composite if image has alpha, otherwise direct paste
                 if rep_image.mode == 'RGBA':
-                    img.paste(rep_image, (img_x, y_pos_rep), rep_image)
+                    img.paste(rep_image, (int(img_x), int(y_pos_rep)), rep_image)
                 else:
-                    img.paste(rep_image, (img_x, y_pos_rep))
+                    img.paste(rep_image, (int(img_x), int(y_pos_rep)))
                 y_pos_rep += rep_image.height + 20 * scale  # Standardized spacing
             else:
                 y_pos_rep += 20 * scale
             
             # Draw divider line after image - standardized spacing
             draw.line([(panel_x, y_pos_rep), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos_rep)], 
-                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+                     fill=colors["text"], width=int(LINE_WIDTH_SCALED))
             y_pos_rep += 20 * scale  # Standardized spacing
             
             # Section label - standardized size
@@ -1742,12 +2007,12 @@ def create_frame(
             draw.text((panel_x, y_pos_rep), "Representative", fill=colors["lime"], font=font_section_label)
             y_pos_rep += 30 * scale  # Standardized spacing
             
-            # Title - standardized size
+            # Title - standardized size (with proper spacing)
             title = str(rep_artwork.get("title", "Unknown"))
             max_title_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
-            y_pos_rep = draw_artwork_title(draw, title, panel_x, y_pos_rep, max_title_width, colors, font_title_large)
+            y_pos_rep = draw_artwork_title(draw, title, panel_x, y_pos_rep, max_title_width, colors, font_title_large, scale)
             
-            # Artist and Year - standardized sizes
+            # Artist and Year - standardized sizes (with proper spacing)
             artist = str(rep_artwork.get("artist", "Unknown"))
             year = str(rep_artwork.get("year", "N/A"))
             max_artist_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
@@ -1759,18 +2024,19 @@ def create_frame(
                     artist = artist[:-1]
                 artist = artist + "..." if artist else "..."
             draw.text((panel_x, y_pos_rep), artist, fill=colors["text"], font=font_artist)
-            y_pos_rep += 22 * scale  # Standardized spacing
-            # Year with standardized font
-            draw.text((panel_x, y_pos_rep), year, fill=colors["text"], font=font_side)
+            y_pos_rep += int(22 * scale)  # Standardized spacing (ensure int)
+            # Year with standardized font (use monofont for content)
+            font_year = get_font(int(FONT_SIZE_TABLE * scale), "thin", mono=True)  # Monofont for year
+            draw.text((panel_x, y_pos_rep), year, fill=colors["text"], font=font_year)
             y_pos_rep += 25 * scale  # Standardized spacing
             
             # Divider before details - standardized layout
             draw.line([(panel_x, y_pos_rep), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos_rep)], 
-                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+                     fill=colors["text"], width=int(LINE_WIDTH_SCALED))
             y_pos_rep += 20 * scale  # Standardized spacing
             
             # Two column layout for remaining fields (distance will be included here)
-            max_width = CANVAS_WIDTH_SCALED - panel_x - 20
+            max_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale  # Fixed: use scale
             y_pos_rep = draw_two_column_fields(
                 draw, rep_artwork, panel_x, y_pos_rep, max_width,
                 colors, font_small, font_side,
@@ -1778,19 +2044,20 @@ def create_frame(
                 all_embeddings=all_embeddings,
                 artwork_idx=rep_idx,
                 distances=distances,  # Show distance in two-column section
-                shelf0_mask=shelf0_mask
+                shelf0_mask=shelf0_mask,
+                show_raw_embedding=False  # Don't show Raw Embedding in ruler step
             )
         
         # Calculate divider position - split panel in half if both sections exist
         if rep_artwork is not None and outlier_artwork is not None:
             # Split panel vertically - representative gets top half, outlier gets bottom half
             divider_y = CANVAS_HEIGHT_SCALED // 2
-            draw.line([(panel_x, divider_y), (CANVAS_WIDTH_SCALED - 30 * scale, divider_y)], fill=colors["text"], width=LINE_WIDTH_SCALED)
+            draw.line([(panel_x, divider_y), (CANVAS_WIDTH_SCALED - 30 * scale, divider_y)], fill=colors["text"], width=int(LINE_WIDTH_SCALED))
             y_pos_outlier = divider_y + 20 * scale  # Start outlier section below divider
         elif rep_artwork is not None:
             # Only representative - use normal spacing
             y_pos_outlier = y_pos_rep + 20 * scale
-            draw.line([(panel_x, y_pos_outlier), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos_outlier)], fill=colors["text"], width=LINE_WIDTH_SCALED)
+            draw.line([(panel_x, y_pos_outlier), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos_outlier)], fill=colors["text"], width=int(LINE_WIDTH_SCALED))
             y_pos_outlier += 20 * scale
         else:
             # Only outlier or neither - start at top
@@ -1819,16 +2086,16 @@ def create_frame(
                 img_x = MAP_WIDTH_SCALED + (PANEL_WIDTH_SCALED - outlier_image.width) // 2
                 # Paste image - need to use alpha composite if image has alpha, otherwise direct paste
                 if outlier_image.mode == 'RGBA':
-                    img.paste(outlier_image, (img_x, y_pos), outlier_image)
+                    img.paste(outlier_image, (int(img_x), int(y_pos)), outlier_image)
                 else:
-                    img.paste(outlier_image, (img_x, y_pos))
+                    img.paste(outlier_image, (int(img_x), int(y_pos)))
                 y_pos += outlier_image.height + 20 * scale  # Standardized spacing
             else:
                 y_pos += 20 * scale
             
             # Draw divider line after image - standardized spacing
             draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
-                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+                     fill=colors["text"], width=int(LINE_WIDTH_SCALED))
             y_pos += 20 * scale  # Standardized spacing
             
             # Section label - standardized size
@@ -1836,12 +2103,12 @@ def create_frame(
             draw.text((panel_x, y_pos), "Outlier", fill=colors["lime"], font=font_section_label)
             y_pos += 30 * scale  # Standardized spacing
             
-            # Title - standardized size
+            # Title - standardized size (with proper spacing)
             title = str(outlier_artwork.get("title", "Unknown"))
             max_title_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
             y_pos = draw_artwork_title(draw, title, panel_x, y_pos, max_title_width, colors, font_title_large, scale)
             
-            # Artist and Year - standardized sizes
+            # Artist and Year - standardized sizes (with proper spacing)
             artist = str(outlier_artwork.get("artist", "Unknown"))
             year = str(outlier_artwork.get("year", "N/A"))
             max_artist_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
@@ -1853,14 +2120,15 @@ def create_frame(
                     artist = artist[:-1]
                 artist = artist + "..." if artist else "..."
             draw.text((panel_x, y_pos), artist, fill=colors["text"], font=font_artist)
-            y_pos += 22 * scale  # Standardized spacing
-            # Year with standardized font
-            draw.text((panel_x, y_pos), year, fill=colors["text"], font=font_side)
+            y_pos += int(22 * scale)  # Standardized spacing (ensure int)
+            # Year with standardized font (use monofont for content)
+            font_year = get_font(int(FONT_SIZE_TABLE * scale), "thin", mono=True)  # Monofont for year
+            draw.text((panel_x, y_pos), year, fill=colors["text"], font=font_year)
             y_pos += 25 * scale  # Standardized spacing
             
             # Divider before details - standardized layout
             draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
-                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+                     fill=colors["text"], width=int(LINE_WIDTH_SCALED))
             y_pos += 20 * scale  # Standardized spacing
             
             # Two column layout for remaining fields (distance will be included here)
@@ -1872,7 +2140,8 @@ def create_frame(
                 all_embeddings=all_embeddings,
                 artwork_idx=outlier_idx,
                 distances=distances,  # Show distance in two-column section
-                shelf0_mask=shelf0_mask
+                shelf0_mask=shelf0_mask,
+                show_raw_embedding=False  # Don't show Raw Embedding in ruler step
             )
     
     # Draw centroid with crosshair design (more elegant than big circle)
@@ -1913,7 +2182,7 @@ def create_frame(
         y_pos += int(40 * scale)
         
         # Draw divider
-        draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], fill=colors["text"], width=LINE_WIDTH_SCALED)
+        draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], fill=colors["text"], width=int(LINE_WIDTH_SCALED))
         y_pos += int(20 * scale)
         
         # Draw table rows
@@ -1996,24 +2265,25 @@ def create_frame(
                 for j in range(i + 1, len(all_top10_items)):
                     x1, y1 = all_top10_items[i]
                     x2, y2 = all_top10_items[j]
-                    draw.line([(x1, y1), (x2, y2)], fill=colors["lime"], width=LINE_WIDTH_SCALED)
+                    draw.line([(x1, y1), (x2, y2)], fill=colors["lime"], width=int(LINE_WIDTH_SCALED))
     
     # Draw top 10 table (5 representatives + 5 outliers) on right side
     if step == "top10" and top_representatives is not None and top_outliers is not None and df is not None:
         panel_x = MAP_WIDTH_SCALED + 30 * scale
         y_pos = 60 * scale  # Higher up
         
-        # Title - larger, more prominent with medium weight
+        # Title - larger, more prominent with medium weight (changed from "Top 10")
         font_section_title = get_font(int(32 * scale), "medium")  # Larger, medium weight for prominence
-        draw.text((panel_x, y_pos), "Representatives", fill=colors["lime"], font=font_section_title)
+        draw.text((panel_x, y_pos), "Closest to Centroid", fill=colors["lime"], font=font_section_title)
         y_pos += int(50 * scale)  # Less spacing
         
-        # Representatives section header
-        font_table = get_font(int(FONT_SIZE_TABLE * scale), "thin")
-        draw.text((panel_x + int(80 * scale), y_pos), "Rank", fill=colors["text"], font=font_table)
-        draw.text((panel_x + int(140 * scale), y_pos), "Title", fill=colors["text"], font=font_table)
-        draw.text((panel_x + int(350 * scale), y_pos), "Artist", fill=colors["text"], font=font_table)
-        draw.text((panel_x + int(520 * scale), y_pos), "Distance", fill=colors["text"], font=font_table)
+        # Representatives section header (use monofont for labels)
+        font_table_label = get_font(int(FONT_SIZE_TABLE * scale), "thin")  # Labels
+        font_table_content = get_font(int(FONT_SIZE_TABLE * scale), "thin", mono=True)  # Content (monofont)
+        draw.text((panel_x + int(80 * scale), y_pos), "Rank", fill=colors["text"], font=font_table_label)
+        draw.text((panel_x + int(140 * scale), y_pos), "Title", fill=colors["text"], font=font_table_label)
+        draw.text((panel_x + int(350 * scale), y_pos), "Artist", fill=colors["text"], font=font_table_label)
+        draw.text((panel_x + int(520 * scale), y_pos), "Distance", fill=colors["text"], font=font_table_label)
         y_pos += int(40 * scale)
         
         # Draw representatives rows (progressive with easing)
@@ -2051,35 +2321,37 @@ def create_frame(
                         thumb_y = int(y_pos - 5 * scale)
                         # Handle transparent images
                         if thumbnail_resized.mode == "RGBA":
-                            img.paste(thumbnail_resized, (thumb_x, thumb_y), thumbnail_resized)
+                            img.paste(thumbnail_resized, (int(thumb_x), thumb_y), thumbnail_resized)
                         else:
-                            img.paste(thumbnail_resized, (thumb_x, thumb_y))
+                            img.paste(thumbnail_resized, (int(thumb_x), thumb_y))
                     
-                    draw.text((panel_x + int(80 * scale), y_pos), f"{rank + 1}", fill=row_color, font=font_table)
+                    # Use monofont for content
+                    draw.text((panel_x + int(80 * scale), y_pos), f"{rank + 1}", fill=row_color, font=font_table_content)
                     title = str(artwork.get("title", "Unknown"))[:30]
-                    draw.text((panel_x + int(140 * scale), y_pos), title, fill=row_color, font=font_table)
+                    draw.text((panel_x + int(140 * scale), y_pos), title, fill=row_color, font=font_table_content)
                     artist = str(artwork.get("artist", "Unknown"))[:25]
-                    draw.text((panel_x + int(350 * scale), y_pos), artist, fill=row_color, font=font_table)
-                    draw.text((panel_x + int(520 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_table)
+                    draw.text((panel_x + int(350 * scale), y_pos), artist, fill=row_color, font=font_table_content)
+                    draw.text((panel_x + int(520 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_table_content)
                     y_pos += int(70 * scale)
             except Exception:
                 pass
         
         y_pos += int(20 * scale)
-        draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], fill=colors["text"], width=LINE_WIDTH_SCALED)
+        draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], fill=colors["text"], width=int(LINE_WIDTH_SCALED))
         y_pos += int(30 * scale)
         
-        # Outliers section title - larger, more prominent with medium weight
+        # Outliers section title - larger, more prominent with medium weight (changed from "Outliers")
         font_section_title = get_font(int(32 * scale), "medium")  # Larger, medium weight for prominence
-        draw.text((panel_x, y_pos), "Outliers", fill=colors["lime"], font=font_section_title)
+        draw.text((panel_x, y_pos), "Farthest from Centroid", fill=colors["lime"], font=font_section_title)
         y_pos += int(50 * scale)  # Less spacing
         
-        # Outliers section header
-        font_table = get_font(int(FONT_SIZE_TABLE * scale), "thin")
-        draw.text((panel_x + int(80 * scale), y_pos), "Rank", fill=colors["text"], font=font_table)
-        draw.text((panel_x + int(140 * scale), y_pos), "Title", fill=colors["text"], font=font_table)
-        draw.text((panel_x + int(350 * scale), y_pos), "Artist", fill=colors["text"], font=font_table)
-        draw.text((panel_x + int(520 * scale), y_pos), "Distance", fill=colors["text"], font=font_table)
+        # Outliers section header (use monofont for labels)
+        font_table_label = get_font(int(FONT_SIZE_TABLE * scale), "thin")  # Labels
+        font_table_content = get_font(int(FONT_SIZE_TABLE * scale), "thin", mono=True)  # Content (monofont)
+        draw.text((panel_x + int(80 * scale), y_pos), "Rank", fill=colors["text"], font=font_table_label)
+        draw.text((panel_x + int(140 * scale), y_pos), "Title", fill=colors["text"], font=font_table_label)
+        draw.text((panel_x + int(350 * scale), y_pos), "Artist", fill=colors["text"], font=font_table_label)
+        draw.text((panel_x + int(520 * scale), y_pos), "Distance", fill=colors["text"], font=font_table_label)
         y_pos += int(40 * scale)
         
         # Draw outliers rows (progressive with easing)
@@ -2117,16 +2389,17 @@ def create_frame(
                         thumb_y = int(y_pos - 5 * scale)
                         # Handle transparent images
                         if thumbnail_resized.mode == "RGBA":
-                            img.paste(thumbnail_resized, (thumb_x, thumb_y), thumbnail_resized)
+                            img.paste(thumbnail_resized, (int(thumb_x), thumb_y), thumbnail_resized)
                         else:
-                            img.paste(thumbnail_resized, (thumb_x, thumb_y))
+                            img.paste(thumbnail_resized, (int(thumb_x), thumb_y))
                     
-                    draw.text((panel_x + int(80 * scale), y_pos), f"{rank + 1}", fill=row_color, font=font_table)
+                    # Use monofont for content
+                    draw.text((panel_x + int(80 * scale), y_pos), f"{rank + 1}", fill=row_color, font=font_table_content)
                     title = str(artwork.get("title", "Unknown"))[:30]
-                    draw.text((panel_x + int(140 * scale), y_pos), title, fill=row_color, font=font_table)
+                    draw.text((panel_x + int(140 * scale), y_pos), title, fill=row_color, font=font_table_content)
                     artist = str(artwork.get("artist", "Unknown"))[:25]
-                    draw.text((panel_x + int(350 * scale), y_pos), artist, fill=row_color, font=font_table)
-                    draw.text((panel_x + int(520 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_table)
+                    draw.text((panel_x + int(350 * scale), y_pos), artist, fill=row_color, font=font_table_content)
+                    draw.text((panel_x + int(520 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_table_content)
                     y_pos += int(70 * scale)
             except Exception:
                 pass
@@ -2209,9 +2482,9 @@ def create_frame(
                     rep_image = rep_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
                     # Handle transparent images
                     if rep_image.mode == "RGBA":
-                        img.paste(rep_image, (img_x, rep_y), rep_image)
+                        img.paste(rep_image, (int(img_x), int(rep_y)), rep_image)
                     else:
-                        img.paste(rep_image, (img_x, rep_y))
+                        img.paste(rep_image, (int(img_x), int(rep_y)))
                 
                 # Info on the right side of image
                 info_y = rep_y
@@ -2345,9 +2618,9 @@ def create_frame(
                     outlier_image = outlier_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
                     # Handle transparent images
                     if outlier_image.mode == "RGBA":
-                        img.paste(outlier_image, (img_x, outlier_y), outlier_image)
+                        img.paste(outlier_image, (int(img_x), int(outlier_y)), outlier_image)
                     else:
-                        img.paste(outlier_image, (img_x, outlier_y))
+                        img.paste(outlier_image, (int(img_x), int(outlier_y)))
                 
                 # Info on the right side of image
                 info_y = outlier_y
@@ -2495,9 +2768,9 @@ def create_frame(
                                 thumb_y = y_pos - 5
                                 # Handle transparent images
                                 if thumbnail_resized.mode == "RGBA":
-                                    img.paste(thumbnail_resized, (thumb_x, thumb_y), thumbnail_resized)
+                                    img.paste(thumbnail_resized, (int(thumb_x), int(thumb_y)), thumbnail_resized)
                                 else:
-                                    img.paste(thumbnail_resized, (thumb_x, thumb_y))
+                                    img.paste(thumbnail_resized, (int(thumb_x), int(thumb_y)))
                             
                             draw.text((panel_x + 80, y_pos), f"{rank + 1}", fill=row_color, font=font_table)
                             title = str(artwork.get("title", "Unknown"))[:30]
@@ -2549,9 +2822,9 @@ def create_frame(
                                 thumb_y = y_pos - 5
                                 # Handle transparent images
                                 if thumbnail_resized.mode == "RGBA":
-                                    img.paste(thumbnail_resized, (thumb_x, thumb_y), thumbnail_resized)
+                                    img.paste(thumbnail_resized, (int(thumb_x), int(thumb_y)), thumbnail_resized)
                                 else:
-                                    img.paste(thumbnail_resized, (thumb_x, thumb_y))
+                                    img.paste(thumbnail_resized, (int(thumb_x), int(thumb_y)))
                             
                             draw.text((panel_x + 80, y_pos), f"{rank + 1}", fill=row_color, font=font_table)
                             title = str(artwork.get("title", "Unknown"))[:30]
@@ -2866,14 +3139,19 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         print(f"   Regal {target_shelf} coords range: x=[{shelf0_coords_2d[:, 0].min():.2f}, {shelf0_coords_2d[:, 0].max():.2f}], y=[{shelf0_coords_2d[:, 1].min():.2f}, {shelf0_coords_2d[:, 1].max():.2f}]")
     else:
         print(f"   Warning: No Regal {target_shelf} coordinates found!")
-        centroid_coord_2d = np.array([MAP_WIDTH_SCALED // 2, MAP_HEIGHT_SCALED // 2])  # Default to center
+        centroid_coord_2d = np.array([MAP_WIDTH // 2, MAP_HEIGHT // 2])  # Default to center
     
     print(f"   Representative artwork ID: {first_artwork_id}")
     if first_idx_in_shelf0 is not None:
         print(f"   Distance to centroid: {distances[first_idx_in_shelf0]:.4f}")
     
+    # Build artwork lookup dictionary for fast DataFrame access
+    print("\n5. Building artwork lookup...")
+    artwork_lookup = build_artwork_lookup(df)
+    print(f"   Built lookup for {len(artwork_lookup)} artwork ID mappings")
+    
     # Generate frames
-    print("\n5. Generating frames...")
+    print("\n6. Generating frames...")
     frames_dir = SCRIPT_DIR / "frames" / f"shelf{target_shelf}_both"
     frames_dir.mkdir(parents=True, exist_ok=True)
     
@@ -2885,7 +3163,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img = create_frame("all", all_coords_2d, all_artwork_ids, shelf0_mask, all_embeddings, 
                           target_shelf=target_shelf, top_representatives=top_items,
                           aesthetic_representative_id=aesthetic_representative_id,
-                          white_background=white_background, supersample_factor=supersample_factor)
+                          white_background=white_background, supersample_factor=supersample_factor,
+                          artwork_lookup=artwork_lookup, df=df)
         # Save with high quality PNG settings
         img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
@@ -2919,12 +3198,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             
             img = create_frame("highlight_slow", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
-                              white_background=white_background, 
+                              white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df, 
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d, 
                               shelf0_coords_progressive=shelf0_coords_2d,
-                              num_shelf0_shown=artwork_num, 
-                              df=df,
+                              num_shelf0_shown=artwork_num,
                               highlighted_artwork_idx=current_artwork_idx_in_all,
                               target_shelf=target_shelf,
                               top_representatives=top_items,
@@ -2941,12 +3220,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         for i in tqdm(range(FRAMES_PER_STEP // 2), desc="Step 2: Hold final"):
             img = create_frame("highlight_slow", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
-                              white_background=white_background, 
+                              white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df, 
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d, 
                               shelf0_coords_progressive=shelf0_coords_2d,
                               num_shelf0_shown=num_shelf0,
-                              df=df,
                               highlighted_artwork_idx=last_artwork_idx,
                               target_shelf=target_shelf,
                               top_representatives=top_items,
@@ -2996,14 +3275,14 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             # IMPORTANT: Pass num_shelf0_shown=num_shelf0 to ensure all green dots are visible (from step 2)
             img = create_frame("highlight", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
-                              white_background=white_background, 
+                              white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df, 
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d, 
                               shelf0_coords_progressive=shelf0_coords_2d[:artwork_num],  # Progressive for lines only
                               centroid_coord=centroid_coord_2d_progressive,
                               distances=distances_progressive,
                               num_shelf0_shown=num_shelf0,  # Show ALL green dots from step 2 (not progressive)
-                              df=df,
                               highlighted_artwork_idx=current_artwork_idx_in_all,
                               target_shelf=target_shelf,
                               top_representatives=top_items,
@@ -3021,14 +3300,14 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         for i in tqdm(range(FRAMES_PER_STEP * 2), desc="Step 3: Hold final"):  # Double the hold frames
             img = create_frame("highlight", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
-                              white_background=white_background, 
+                              white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df, 
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d, 
                               shelf0_coords_progressive=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
                               distances=distances,
                               num_shelf0_shown=num_shelf0,
-                              df=df,
                               highlighted_artwork_idx=last_artwork_idx,
                               target_shelf=target_shelf,
                               top_representatives=top_items,
@@ -3044,14 +3323,14 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         fade_progress = 1.0 - (fade_frame + 1) / FRAMES_FADE_OUT  # 1.0 to 0.0
         img = create_frame("highlight", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
-                          supersample_factor=supersample_factor, 
+                          supersample_factor=supersample_factor,
+                          artwork_lookup=artwork_lookup, df=df, 
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d, 
                           shelf0_coords_progressive=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
                           distances=distances,
                           num_shelf0_shown=num_shelf0,
-                          df=df,
                           highlighted_artwork_idx=last_artwork_idx if num_shelf0 > 0 else None,
                           target_shelf=target_shelf,
                           top_representatives=top_items,
@@ -3100,12 +3379,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
                               white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
                               distances=distances,
                               representative_idx=first_idx_in_all,
-                              df=df,
                               highlighted_artwork_idx=artwork_idx,
                               lines_to_draw=lines_to_draw,
                               target_shelf=target_shelf,
@@ -3124,12 +3403,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
                               white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
                               distances=distances,
                               representative_idx=first_idx_in_all,
-                              df=df,
                               highlighted_artwork_idx=artwork_idx,
                               lines_to_draw=lines_to_draw,
                               target_shelf=target_shelf,
@@ -3157,12 +3436,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
                               white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
                               distances=distances,
                               representative_idx=first_idx_in_all,
-                              df=df,
                               highlighted_artwork_idx=artwork_idx,
                               lines_to_draw=lines_to_draw,
                               target_shelf=target_shelf,
@@ -3181,12 +3460,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
                               white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
                               distances=distances,
                               representative_idx=first_idx_in_all,
-                              df=df,
                               highlighted_artwork_idx=artwork_idx,
                               lines_to_draw=lines_to_draw,
                               target_shelf=target_shelf,
@@ -3246,12 +3525,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
                               white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
                               distances=distances,
                               representative_idx=first_idx_in_all,
-                              df=df,
                               highlighted_artwork_idx=highlight_idx or artwork_idx,
                               lines_to_draw=lines_to_draw,
                               target_shelf=target_shelf,
@@ -3275,12 +3554,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                 img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
                               supersample_factor=supersample_factor,
                               white_background=white_background,
+                              artwork_lookup=artwork_lookup, df=df,
                                   all_embeddings=all_embeddings,
                                   shelf0_coords=shelf0_coords_2d,
                                   centroid_coord=centroid_coord_2d,
                                   distances=distances,
                                   representative_idx=first_idx_in_all,
-                                  df=df,
                                   highlighted_artwork_idx=artwork_idx,
                                   lines_to_draw=lines_to_draw,
                                   target_shelf=target_shelf,
@@ -3310,11 +3589,11 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img = create_frame("top10", all_coords_2d, all_artwork_ids, shelf0_mask,
                               white_background=white_background,
                               supersample_factor=supersample_factor,
+                              artwork_lookup=artwork_lookup, df=df,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
                               distances=distances,
-                              df=df,
                               target_shelf=target_shelf,
                               top_representatives=top_representatives,
                               top_outliers=top_outliers,
@@ -3332,11 +3611,11 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img = create_frame("top10", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
                           supersample_factor=supersample_factor,
+                          artwork_lookup=artwork_lookup, df=df,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
                           distances=distances,
-                          df=df,
                           target_shelf=target_shelf,
                           top_representatives=top_representatives,
                           top_outliers=top_outliers,
@@ -3360,11 +3639,11 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img = create_frame("top10", all_coords_2d, all_artwork_ids, shelf0_mask,
                               white_background=white_background,
                               supersample_factor=supersample_factor,
+                              artwork_lookup=artwork_lookup, df=df,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
                               distances=distances,
-                              df=df,
                               target_shelf=target_shelf,
                               top_representatives=top_representatives,
                               top_outliers=top_outliers,
@@ -3382,11 +3661,11 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img = create_frame("top10", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
                           supersample_factor=supersample_factor,
+                          artwork_lookup=artwork_lookup, df=df,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
                           distances=distances,
-                          df=df,
                           target_shelf=target_shelf,
                           top_representatives=top_representatives,
                           top_outliers=top_outliers,
@@ -3408,12 +3687,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
                           supersample_factor=supersample_factor,
+                          artwork_lookup=artwork_lookup, df=df,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
                           distances=distances,
                           representative_idx=first_idx_in_all,
-                          df=df,
                           target_shelf=target_shelf,
                           top_representatives=top_representatives,
                           top_outliers=top_outliers,
@@ -3430,12 +3709,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
                           supersample_factor=supersample_factor,
+                          artwork_lookup=artwork_lookup, df=df,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
                           distances=distances,
                           representative_idx=first_idx_in_all,
-                          df=df,
                           target_shelf=target_shelf,
                           top_representatives=top_representatives,
                           top_outliers=top_outliers,
@@ -3453,12 +3732,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
                           supersample_factor=supersample_factor,
+                          artwork_lookup=artwork_lookup, df=df,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
                           distances=distances,
                           representative_idx=first_idx_in_all,
-                          df=df,
                           target_shelf=target_shelf,
                           top_representatives=top_representatives,
                           top_outliers=top_outliers,
@@ -3475,12 +3754,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
                           supersample_factor=supersample_factor,
+                          artwork_lookup=artwork_lookup, df=df,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
                           distances=distances,
                           representative_idx=first_idx_in_all,
-                          df=df,
                           target_shelf=target_shelf,
                           top_representatives=top_representatives,
                           top_outliers=top_outliers,
