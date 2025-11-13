@@ -248,21 +248,24 @@ def get_cache_dir() -> Path:
     return cache_dir
 
 
-def get_embeddings_cache_file() -> Path:
+def get_embeddings_cache_file(cache_name: Optional[str] = None) -> Path:
     """Get the path to the global embeddings cache file."""
     cache_dir = get_cache_dir()
+    if cache_name:
+        return cache_dir / f"{cache_name}.pkl"
     return cache_dir / "all_embeddings.pkl"
 
 
-def save_all_embeddings(embeddings_dict: Dict, metadata: Optional[Dict] = None):
+def save_all_embeddings(embeddings_dict: Dict, metadata: Optional[Dict] = None, cache_name: Optional[str] = None):
     """
     Save all artwork embeddings as a tensor indexed by artwork ID.
     
     Args:
         embeddings_dict: Dictionary mapping artwork ID (int or str) to embedding vector
         metadata: Optional metadata dictionary (e.g., CSV hash, model name, etc.)
+        cache_name: Optional custom name for the cache file (without .pkl extension)
     """
-    cache_file = get_embeddings_cache_file()
+    cache_file = get_embeddings_cache_file(cache_name)
     
     cache_data = {
         "embeddings": embeddings_dict,  # Dict[str, np.ndarray] - ID -> embedding
@@ -280,7 +283,8 @@ def save_all_embeddings(embeddings_dict: Dict, metadata: Optional[Dict] = None):
 def generate_embeddings(
     csv_path: str,
     base_dir: str = "production-export-2025-11-04t14-27-00-000z",
-    force_regenerate: bool = False
+    force_regenerate: bool = False,
+    cache_name: Optional[str] = None
 ) -> Dict:
     """
     Generate embeddings for all artworks in the CSV and save to cache.
@@ -298,7 +302,7 @@ def generate_embeddings(
     print(f"Loaded {len(df)} artworks")
     
     # Check if cache exists and load it
-    cache_file = get_embeddings_cache_file()
+    cache_file = get_embeddings_cache_file(cache_name)
     cached_embeddings = {}
     
     if cache_file.exists() and not force_regenerate:
@@ -359,7 +363,7 @@ def generate_embeddings(
             "model_name": MODEL_NAME,
             "num_artworks": len(df)
         }
-        save_all_embeddings(embeddings_dict, metadata)
+        save_all_embeddings(embeddings_dict, metadata, cache_name)
     
     return embeddings_dict
 
@@ -371,9 +375,10 @@ def main():
     parser.add_argument("--csv", default="artworks_with_thumbnails_ting.csv", help="Path to CSV file")
     parser.add_argument("--base-dir", default="production-export-2025-11-04t14-27-00-000z", help="Base directory for images")
     parser.add_argument("--force", action="store_true", help="Force regeneration of all embeddings (ignore cache)")
+    parser.add_argument("--cache-name", default=None, help="Custom name for the embeddings cache file (without .pkl extension)")
     args = parser.parse_args()
     
-    generate_embeddings(args.csv, args.base_dir, force_regenerate=args.force)
+    generate_embeddings(args.csv, args.base_dir, force_regenerate=args.force, cache_name=args.cache_name)
     print("\n✓ Embedding generation complete!")
 
 

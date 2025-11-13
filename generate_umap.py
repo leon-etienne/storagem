@@ -384,9 +384,36 @@ def parse_size_str(s):
 
 # ---------- UMAP + CSV utilities (NEW) ----------
 
+def load_embeddings_from_cache(cache_file: Optional[str] = None) -> Dict:
+    """
+    Load embeddings from the pickle cache file.
+    
+    Args:
+        cache_file: Optional path to cache file. If None, uses default location.
+    
+    Returns:
+        Dictionary mapping artwork ID to embedding vector
+    """
+    if cache_file is None:
+        cache_file = get_embeddings_cache_file()
+    else:
+        cache_file = Path(cache_file)
+    
+    if not cache_file.exists():
+        raise FileNotFoundError(f"Embeddings cache not found at {cache_file}")
+    
+    with open(cache_file, "rb") as f:
+        cache_data = pickle.load(f)
+    
+    embeddings_dict = cache_data.get("embeddings", {})
+    print(f"✓ Loaded {len(embeddings_dict)} embeddings from cache")
+    return embeddings_dict
+
+
 def compute_umap_2d(embeddings_dict: Dict) -> tuple[np.ndarray, list]:
     """
     Compute a 2D UMAP embedding (x, y) for all embeddings.
+    Uses parameters matching visualize_shelf0_representative.py.
 
     Args:
         embeddings_dict: Dict[artwork_id, np.ndarray] of shape (embedding_dim,)
@@ -412,6 +439,29 @@ def compute_umap_2d(embeddings_dict: Dict) -> tuple[np.ndarray, list]:
     )
     reduced = reducer.fit_transform(emb_matrix)
     return reduced, ids
+
+
+def save_umap_to_csv(embeddings_dict: Dict, output_csv: str):
+    """
+    Load embeddings from cache, compute UMAP, and save to CSV.
+    
+    Args:
+        embeddings_dict: Dictionary mapping artwork ID to embedding vector
+        output_csv: Path to output CSV file
+    """
+    print("Computing UMAP reduction...")
+    reduced, ids = compute_umap_2d(embeddings_dict)
+    
+    # Create DataFrame with artwork_id, umap_x, umap_y
+    df = pd.DataFrame({
+        "artwork_id": ids,
+        "umap_x": reduced[:, 0],
+        "umap_y": reduced[:, 1]
+    })
+    
+    df.to_csv(output_csv, index=False)
+    print(f"✓ Saved UMAP coordinates for {len(df)} artworks to {output_csv}")
+    return df
 
 
 def generate_size_cube_images(
@@ -639,8 +689,8 @@ def save_embeddings_and_umap_to_csv(
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Generate embeddings for all artworks and save to cache.")
-    parser.add_argument("--csv", default="artworks_with_thumbnails_ting.csv", help="Path to CSV file")
+    parser = argparse.ArgumentParser(description="Generate embeddings for all artworks and save to cache, or generate UMAP from cached embeddings.")
+    parser.add_argument("--csv", default=None, help="Path to CSV file (required for embedding generation)")
     parser.add_argument("--base-dir", default="production-export-2025-11-04t14-27-00-000z", help="Base directory for images")
     parser.add_argument("--force", action="store_true", help="Force regeneration of all embeddings (ignore cache)")
     # This now saves a CSV with original columns + embeddings + UMAP + size cols
@@ -650,7 +700,31 @@ def main():
         help="Optional path to save full CSV (original columns + size + embeddings + 2D UMAP). "
              "If omitted but flag is present, uses '<input>_with_embeddings_umap.csv'.",
     )
+    # New option: generate UMAP directly from pickle cache
+    parser.add_argument(
+        "--umap-from-cache",
+        default=None,
+        help="Generate UMAP CSV directly from cached embeddings. Provide output CSV path. "
+             "If set, this mode loads embeddings from all_embeddings.pkl and saves UMAP coordinates.",
+    )
+    parser.add_argument(
+        "--cache-file",
+        default=None,
+        help="Path to embeddings cache file (default: embeddings_cache/all_embeddings.pkl)",
+    )
     args = parser.parse_args()
+    
+    # If --umap-from-cache is specified, generate UMAP directly from cache
+    if args.umap_from_cache:
+        print("Generating UMAP from cached embeddings...")
+        embeddings_dict = load_embeddings_from_cache(args.cache_file)
+        save_umap_to_csv(embeddings_dict, args.umap_from_cache)
+        print("\n✓ UMAP generation complete!")
+        return
+    
+    # Otherwise, proceed with normal embedding generation workflow
+    if not args.csv:
+        parser.error("--csv is required when not using --umap-from-cache mode")
     
     embeddings_dict = generate_embeddings(args.csv, args.base_dir, force_regenerate=args.force)
 
