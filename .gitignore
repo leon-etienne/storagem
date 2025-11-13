@@ -32,7 +32,6 @@ Icon?
 /downloads/*
 *.csv
 *.png
-*.html
 
 # Video making folder
 # /video_making/
