@@ -1,5 +1,8 @@
 /production-export-2025-11-04t14-27-00-000z/*
 /production-export-2025-11-09t12-26-16-007z/*
+/production-export-2025-11-13t12-26-16-007z/*
+/production-export-2025-11-13t13-42-48-005z/*
+
 # Python general ignores
 __pycache__/
 *.py[cod]
@@ -32,6 +35,7 @@ Icon?
 /downloads/*
 *.csv
 *.png
+*.html
 
 # Video making folder
 # /video_making/
