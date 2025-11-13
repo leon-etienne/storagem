@@ -30,32 +30,32 @@
 
 ## Curation Data
 
-### Groups (Shelf Clustering)
-- **Group 1**: Shelves 1, 5, 9
-- **Group 2**: Shelves 3, 4
-- **Group 3**: Shelves 2, 6, 7
-- **Group 4**: Shelves 0, 8
+### Groups (Regal Clustering)
+- **Group 1**: Regals 1, 5, 9
+- **Group 2**: Regals 3, 4
+- **Group 3**: Regals 2, 6, 7
+- **Group 4**: Regals 0, 8
 
-### Representatives (by Shelf)
-| Shelf | Artwork ID | Notes |
+### Representatives (by Regal)
+| Regal | Artwork ID | Notes |
 |-------|------------|-------|
 | 0     | 464        |       |
 | 1     | 152        |       |
 | 2     | 161        |       |
 | 3     | 376        |       |
-| 4     | 450        |       |
+| 4     | 454        |       |
 | 5     | 360        |       |
 | 6     | 468        |       |
 | 7     | 107        |       |
 | 8     | 389        |       |
 | 9     | 185        |       |
 
-### Outliers (by Shelf)
-| Shelf | Artwork ID |
+### Outliers (by Regal)
+| Regal | Artwork ID |
 |-------|------------|
 | 0     | 479        |
 | 1     | 386        |
-| 2     | 334        |
+| 2     | 326        |
 | 3     | 82         |
 | 4     | 424        |
 | 5     | 310        |
@@ -74,12 +74,12 @@ GROUPS = {
 }
 
 REPRESENTATIVES = {
-    0: 464, 1: 152, 2: 161, 3: 376, 4: 450,
+    0: 464, 1: 152, 2: 161, 3: 376, 4: 454,
     5: 360, 6: 468, 7: 107, 8: 389, 9: 185
 }
 
 OUTLIERS = {
-    0: 479, 1: 386, 2: 334, 3: 82, 4: 424,
+    0: 479, 1: 386, 2: 326, 3: 82, 4: 424,
     5: 310, 6: 93, 7: 96, 8: 343, 9: 441
 }
 ```
@@ -89,17 +89,17 @@ OUTLIERS = {
 ## Visualization Requirements
 
 ### File Naming System
-- **Frames Directory**: `frames/shelf{shelf_number}_{mode}/`
-  - Example: `frames/shelf0_both/`, `frames/shelf0_representative/`, `frames/shelf0_outlier/`
-- **Video Output**: `frames/shelf{shelf_number}_{mode}.mp4`
-  - Example: `shelf0_both.mp4`, `shelf0_representative.mp4`, `shelf0_outlier.mp4`
+- **Frames Directory**: `frames/regal{regal_number}_{mode}/`
+  - Example: `frames/regal0_both/`, `frames/regal0_representative/`, `frames/regal0_outlier/`
+- **Video Output**: `frames/regal{regal_number}_{mode}.mp4`
+  - Example: `regal0_both.mp4`, `regal0_representative.mp4`, `regal0_outlier.mp4`
 - **Mode Options**: `representative`, `outlier`, or `both` (default: both)
 
 ### Visual Elements
 
 #### Points and Circles
-- **Non-shelf points**: White fill, no outline, lower opacity (gray)
-- **Shelf points**: 
+- **Non-Regal points**: White fill, no outline, lower opacity (gray)
+- **Regal points**: 
   - Highlighted: Bright green fill, no border
   - Non-highlighted: Lower opacity green fill, no border
 - **Top 10 items**: Circular thumbnail images (40px diameter), no border
@@ -107,12 +107,12 @@ OUTLIERS = {
 - **Representatives/Outliers**: Marked with bright green circles
 
 #### Text
-- **Title text**: Displayed next to ALL shelf items (not just highlighted)
+- **Title text**: Displayed next to ALL Regal items (not just highlighted)
 - **Text color**: White on black background
 - **Font weights**: Thin for labels/info, Medium for titles
 
 #### Lines and Connections
-- **Connection lines between shelf items**: Gray, thin, less obvious
+- **Connection lines between Regal items**: Gray, thin, less obvious
 - **Lines from centroid**: Gray (except closest/farthest in green)
 - **Lines between top 10 items**: Bright green lines connecting all pairs of top 10 items (5 representatives + 5 outliers)
 
@@ -150,10 +150,10 @@ OUTLIERS = {
 ### Visualization Steps
 
 1. **All Embeddings**: Show all artworks as points
-2. **Identify Shelf Items**: Highlight shelf items one by one (slow, no lines)
-3. **Centroid & Distances**: Show shelf items with centroid and distance calculations
+2. **Identify Regal Items**: Highlight Regal items one by one (slow, no lines)
+3. **Centroid & Distances**: Show Regal items with centroid and distance calculations
 4. **Cycle Through Artworks**: Display each artwork with its calculation details
-5. **Draw Lines from Centroid**: Animate lines from centroid to all shelf items
+5. **Draw Lines from Centroid**: Animate lines from centroid to all Regal items
 6. **Top 10 (5 Representatives + 5 Outliers)**: Show top 5 representatives and top 5 outliers appearing one by one with green lines connecting them simultaneously
 7. **Side-by-Side View**: Show selected representative and outlier on left side with images and info, rank table on right side
 
@@ -171,17 +171,17 @@ OUTLIERS = {
 
 ### Usage
 ```bash
-# Generate both representative and outlier video for shelf 0 (default)
+# Generate both representative and outlier video for Regal 0 (default)
 python visualize_shelf0_representative.py --shelf 0 --mode both
 
-# Generate representative video for shelf 0
+# Generate representative video for Regal 0
 python visualize_shelf0_representative.py --shelf 0 --mode representative
 
-# Generate outlier video for shelf 0
+# Generate outlier video for Regal 0
 python visualize_shelf0_representative.py --shelf 0 --mode outlier
 
-# Generate for all shelves (both modes)
-for shelf in {0..9}; do
-    python visualize_shelf0_representative.py --shelf $shelf --mode both
+# Generate for all Regals (both modes)
+for regal in {0..9}; do
+    python visualize_shelf0_representative.py --shelf $regal --mode both
 done
 ```

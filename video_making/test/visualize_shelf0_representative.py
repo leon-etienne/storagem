@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Visualize the process of finding representatives and outliers for a given shelf.
+Visualize the process of finding representatives and outliers for a given Regal.
 Creates step-by-step frames showing:
 1. All embeddings map
-2. Identify shelf items (one by one with easing)
+2. Identify Regal items (one by one with easing)
 3. Calculate and show centroid with distances
 4. Cycle through artworks showing calculations
 5. Draw lines from centroid
@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from sklearn.manifold import TSNE
 from tqdm import tqdm
 
@@ -60,8 +60,9 @@ COLOR_LIME = (0, 255, 0)  # Pure green
 COLOR_GRAY_LIGHT = (200, 200, 200)  # Light gray for text on black
 COLOR_GRAY_DARK = (150, 150, 150)  # Medium gray for text on black
 COLOR_POINT_GRAY = (140, 140, 140)  # Gray for regular points (more gray instead of pure white)
-COLOR_WHITE_LOW_OPACITY = (120, 120, 120)  # Gray for non-shelf points (more gray instead of pure black/white)
-COLOR_LIME_LOW_OPACITY = (0, 150, 0)  # Simulated lower opacity for non-highlighted shelf points
+COLOR_WHITE_LOW_OPACITY = (120, 120, 120)  # Gray for non-Regal points (more gray instead of pure black/white)
+COLOR_CIRCLE_GRAY = (100, 100, 100)  # Gray for selection circles (instead of black)
+COLOR_LIME_LOW_OPACITY = (0, 150, 0)  # Simulated lower opacity for non-highlighted Regal points
 COLOR_GRAY_CONNECTION = (100, 100, 100)  # Gray for connection lines
 
 # White background mode colors
@@ -82,7 +83,7 @@ PANEL_HEIGHT = CANVAS_HEIGHT
 
 # Visualization parameters
 POINT_SIZE = 4  # Size for regular points
-POINT_SIZE_LARGE = 8  # Size for shelf 0 points
+POINT_SIZE_LARGE = 8  # Size for Regal 0 points
 POINT_SIZE_REPRESENTATIVE = 40  # Size for representative points (with images)
 LINE_WIDTH = 1
 FONT_SIZE_TITLE = 48
@@ -247,6 +248,7 @@ def get_colors(white_bg: bool = False) -> Dict[str, Tuple[int, int, int]]:
             "connection": COLOR_GRAY_CONNECTION_WHITE_BG,
             "gray_light": COLOR_TEXT_GRAY_WHITE_BG,
             "gray_dark": COLOR_TEXT_GRAY_WHITE_BG,
+            "circle_gray": COLOR_CIRCLE_GRAY,
         }
     else:
         return {
@@ -260,6 +262,7 @@ def get_colors(white_bg: bool = False) -> Dict[str, Tuple[int, int, int]]:
             "connection": COLOR_GRAY_CONNECTION,
             "gray_light": COLOR_GRAY_LIGHT,
             "gray_dark": COLOR_GRAY_DARK,
+            "circle_gray": COLOR_CIRCLE_GRAY,
         }
 
 
@@ -321,7 +324,10 @@ def create_frame(
     top10_reps_shown: Optional[int] = None,  # Number of representatives to show in top10 (for animation)
     top10_outliers_shown: Optional[int] = None,  # Number of outliers to show in top10 (for animation)
     top10_item_ease_progress: Optional[float] = None,  # Easing progress for currently appearing top10 item
-    white_background: bool = False  # Use white background instead of black
+    white_background: bool = False,  # Use white background instead of black
+    circle_expand_progress: Optional[float] = None,  # 0.0 to 1.0 for expanding circle animation (for highlight_slow step)
+    ruler_progress: Optional[float] = None,  # 0.0 to 1.0 for ruler line animation progress
+    ruler_to_rep: bool = True  # True for drawing to representative, False for outlier
 ) -> Image.Image:
     """Create a single frame for the visualization."""
     # Validate representative_idx - if it's a DataFrame or invalid, set to None
@@ -353,17 +359,18 @@ def create_frame(
     
     # Draw title (white text on black)
     # Always show both representatives and outliers
-    title_text = f"Finding Representatives and Outliers for Shelf {target_shelf}"
+    title_text = f"Finding Representatives and Outliers for Regal {target_shelf}"
     draw.text((50, 30), title_text, fill=colors["text"], font=font_title)
     
     # Draw step label
     step_labels = {
         "all": "All Embeddings",
-        "highlight_slow": "Identify shelf items",
-        "highlight": f"Highlighting Shelf {target_shelf}",
-        "centroid": f"Highlighting Shelf {target_shelf}",
-        "distances": f"Highlighting Shelf {target_shelf}",
+        "highlight_slow": "Identify Regal items",
+        "highlight": f"Highlighting Regal {target_shelf}",
+        "centroid": f"Highlighting Regal {target_shelf}",
+        "distances": f"Highlighting Regal {target_shelf}",
         "representative": "Representative Found",
+        "ruler": "Measuring Distances",
         "representatives": "Top 10 Representatives",
         "zoom": "Selected Representative",
         "outlier": "Outlier Found"
@@ -380,13 +387,101 @@ def create_frame(
     # Draw divider line - draw AFTER panel background
     draw.line([(MAP_WIDTH, 0), (MAP_WIDTH, CANVAS_HEIGHT)], fill=colors["text"], width=2)
     
-    # Draw all points (fill, no stroke for non-shelf items) with lower opacity
+    # Draw all points (fill, no stroke for non-Regal items) with lower opacity
     for i, (x, y) in enumerate(all_coords):
         if not shelf0_mask[i]:
             draw.ellipse([x - POINT_SIZE, y - POINT_SIZE, x + POINT_SIZE, y + POINT_SIZE],
                        fill=colors["point_low_opacity"], outline=None, width=0)
     
-    # Draw shelf 0 points (lime green, larger) with title text
+    # Draw lines BEFORE green circles (so they appear behind)
+    # Draw connections between Regal 0 items (thin lines, gray on black - less obvious)
+    # Only draw lines if step is not "highlight_slow"
+    if step != "highlight_slow":
+        coords_to_use = shelf0_coords_progressive if (shelf0_coords_progressive is not None and num_shelf0_shown is not None) else shelf0_coords
+        if coords_to_use is not None and len(coords_to_use) > 1:
+            num_to_show = num_shelf0_shown if num_shelf0_shown is not None else len(coords_to_use)
+            for i in range(min(num_to_show, len(coords_to_use))):
+                for j in range(i + 1, min(num_to_show, len(coords_to_use))):
+                    x1, y1 = coords_to_use[i]
+                    x2, y2 = coords_to_use[j]
+                    draw.line([(x1, y1), (x2, y2)], fill=colors["connection"], width=LINE_WIDTH)
+    
+    # Extract centroid coordinates (needed for lines)
+    cx, cy = None, None
+    if centroid_coord is not None:
+        try:
+            if isinstance(centroid_coord, np.ndarray):
+                cx, cy = float(centroid_coord[0]), float(centroid_coord[1])
+            elif isinstance(centroid_coord, (tuple, list)) and len(centroid_coord) >= 2:
+                cx, cy = float(centroid_coord[0]), float(centroid_coord[1])
+            if cx is not None and cy is not None:
+                cx = max(50, min(cx, MAP_WIDTH - 50))
+                cy = max(100, min(cy, MAP_HEIGHT - 50))
+        except (ValueError, TypeError, IndexError, AttributeError):
+            cx, cy = None, None
+    
+    # Draw lines from centroid to Regal 0 points (if centroid is available and not in slow step)
+    # Draw BEFORE green circles
+    if cx is not None and cy is not None and step != "highlight_slow":
+        # Draw lines progressively if lines_to_draw is provided (for animation)
+        if lines_to_draw is not None:
+            for line_data in lines_to_draw:
+                if len(line_data) == 4:  # (start, end, progress, is_closest)
+                    start, end, progress, is_closest = line_data
+                else:  # (start, end, progress)
+                    start, end, progress = line_data
+                    is_closest = False
+                
+                if progress > 0:
+                    # Calculate intermediate point based on progress
+                    x1, y1 = start
+                    x2, y2 = end
+                    inter_x = x1 + (x2 - x1) * progress
+                    inter_y = y1 + (y2 - y1) * progress
+                    # Draw line from start to intermediate point
+                    # Use gray for all lines (no green line for closest)
+                    line_color = colors["connection"]
+                    line_width = LINE_WIDTH
+                    draw.line([(x1, y1), (inter_x, inter_y)], fill=line_color, width=line_width)
+        else:
+            # Draw lines from centroid to Regal 0 points (gray on black - less obvious)
+            # Use progressive coords if available
+            coords_to_use = shelf0_coords_progressive if (shelf0_coords_progressive is not None and num_shelf0_shown is not None) else shelf0_coords
+            if coords_to_use is not None:
+                num_to_show = num_shelf0_shown if num_shelf0_shown is not None else len(coords_to_use)
+                for i in range(min(num_to_show, len(coords_to_use))):
+                    x, y = coords_to_use[i]
+                    draw.line([(cx, cy), (x, y)], fill=colors["connection"], width=LINE_WIDTH)
+    
+    # Draw expanding gray circle for highlight_slow step (BEFORE green circle)
+    if step == "highlight_slow" and highlighted_artwork_idx is not None and shelf0_coords is not None and circle_expand_progress is not None:
+        try:
+            if hasattr(highlighted_artwork_idx, 'item'):
+                highlight_idx_check = int(highlighted_artwork_idx.item())
+            elif isinstance(highlighted_artwork_idx, (np.integer, np.int64, np.int32)):
+                highlight_idx_check = int(highlighted_artwork_idx)
+            else:
+                highlight_idx_check = int(highlighted_artwork_idx)
+        except (ValueError, TypeError, AttributeError):
+            highlight_idx_check = int(float(str(highlighted_artwork_idx)))
+        
+        shelf0_indices = np.where(shelf0_mask)[0]
+        shelf0_indices_list = [int(x) for x in shelf0_indices.tolist()]
+        if highlight_idx_check in shelf0_indices_list:
+            highlight_idx_in_shelf0 = shelf0_indices_list.index(highlight_idx_check)
+            if highlight_idx_in_shelf0 < len(shelf0_coords):
+                hx, hy = shelf0_coords[highlight_idx_in_shelf0]
+                # Expanding circle animation: start from small (5px) to full size (20px radius)
+                min_radius = 5
+                max_radius = 20
+                # Use ease-in-out curve
+                eased = circle_expand_progress * circle_expand_progress * (3 - 2 * circle_expand_progress)
+                current_radius = min_radius + (max_radius - min_radius) * eased
+                # Draw gray expanding circle BEHIND green circle
+                draw.ellipse([hx - current_radius, hy - current_radius, hx + current_radius, hy + current_radius],
+                            fill=None, outline=colors["circle_gray"], width=2)
+    
+    # Draw Regal 0 points (lime green, larger) with title text
     # If progressive mode, only show up to num_shelf0_shown
     if shelf0_coords_progressive is not None and num_shelf0_shown is not None:
         # Progressive mode: show artworks being added one by one
@@ -419,7 +514,7 @@ def create_frame(
                             x + POINT_SIZE_LARGE, y + POINT_SIZE_LARGE],
                            fill=current_color, outline=None, width=0)
                 
-                # Draw title text next to the point for all shelf items
+                # Draw title text next to the point for all Regal items
                 if df is not None:
                     try:
                         # Get artwork title for this point
@@ -441,7 +536,7 @@ def create_frame(
                     except Exception:
                         pass
     elif shelf0_coords is not None:
-        # Normal mode: show all shelf 0 points
+        # Normal mode: show all Regal 0 points
         for idx, (x, y) in enumerate(shelf0_coords):
             shelf0_indices = np.where(shelf0_mask)[0]
             is_highlighted = (highlighted_artwork_idx is not None and 
@@ -458,7 +553,7 @@ def create_frame(
                             x + POINT_SIZE_LARGE, y + POINT_SIZE_LARGE],
                            fill=colors["lime_low_opacity"], outline=None, width=0)
             
-            # Draw title text for all shelf items
+            # Draw title text for all Regal items
             if df is not None:
                 try:
                     # Get artwork title for this point
@@ -480,65 +575,8 @@ def create_frame(
                 except Exception:
                     pass
     
-    # Draw connections between shelf 0 items (thin lines, gray on black - less obvious)
-    # Only draw lines if step is not "highlight_slow"
-    if step != "highlight_slow":
-        coords_to_use = shelf0_coords_progressive if (shelf0_coords_progressive is not None and num_shelf0_shown is not None) else shelf0_coords
-        if coords_to_use is not None and len(coords_to_use) > 1:
-            num_to_show = num_shelf0_shown if num_shelf0_shown is not None else len(coords_to_use)
-            for i in range(min(num_to_show, len(coords_to_use))):
-                for j in range(i + 1, min(num_to_show, len(coords_to_use))):
-                    x1, y1 = coords_to_use[i]
-                    x2, y2 = coords_to_use[j]
-                    draw.line([(x1, y1), (x2, y2)], fill=colors["connection"], width=LINE_WIDTH)
-    
-    # Extract centroid coordinates
-    cx, cy = None, None
-    if centroid_coord is not None:
-        try:
-            if isinstance(centroid_coord, np.ndarray):
-                cx, cy = float(centroid_coord[0]), float(centroid_coord[1])
-            elif isinstance(centroid_coord, (tuple, list)) and len(centroid_coord) >= 2:
-                cx, cy = float(centroid_coord[0]), float(centroid_coord[1])
-            if cx is not None and cy is not None:
-                cx = max(50, min(cx, MAP_WIDTH - 50))
-                cy = max(100, min(cy, MAP_HEIGHT - 50))
-        except (ValueError, TypeError, IndexError, AttributeError):
-            cx, cy = None, None
-    
-    # Draw lines from centroid to shelf 0 points (if centroid is available and not in slow step)
-    if cx is not None and cy is not None and step != "highlight_slow":
-        # Draw lines progressively if lines_to_draw is provided (for animation)
-        if lines_to_draw is not None:
-            for line_data in lines_to_draw:
-                if len(line_data) == 4:  # (start, end, progress, is_closest)
-                    start, end, progress, is_closest = line_data
-                else:  # (start, end, progress)
-                    start, end, progress = line_data
-                    is_closest = False
-                
-                if progress > 0:
-                    # Calculate intermediate point based on progress
-                    x1, y1 = start
-                    x2, y2 = end
-                    inter_x = x1 + (x2 - x1) * progress
-                    inter_y = y1 + (y2 - y1) * progress
-                    # Draw line from start to intermediate point
-                    # Use gray for all lines (no green line for closest)
-                    line_color = colors["connection"]
-                    line_width = LINE_WIDTH
-                    draw.line([(x1, y1), (inter_x, inter_y)], fill=line_color, width=line_width)
-        else:
-            # Draw lines from centroid to shelf 0 points (gray on black - less obvious)
-            # Use progressive coords if available
-            coords_to_use = shelf0_coords_progressive if (shelf0_coords_progressive is not None and num_shelf0_shown is not None) else shelf0_coords
-            if coords_to_use is not None:
-                num_to_show = num_shelf0_shown if num_shelf0_shown is not None else len(coords_to_use)
-                for i in range(min(num_to_show, len(coords_to_use))):
-                    x, y = coords_to_use[i]
-                    draw.line([(cx, cy), (x, y)], fill=colors["connection"], width=LINE_WIDTH)
-    
     # Highlight currently displayed artwork (if different from representative)
+    # Draw gray circle AFTER green circle (so it appears on top but behind other elements)
     if highlighted_artwork_idx is not None and shelf0_coords is not None:
         # Convert to plain int
         try:
@@ -557,9 +595,9 @@ def create_frame(
             highlight_idx_in_shelf0 = shelf0_indices_list.index(highlight_idx_check)
             if highlight_idx_in_shelf0 < len(shelf0_coords):
                 hx, hy = shelf0_coords[highlight_idx_in_shelf0]
-                # Draw pulsing circle around highlighted artwork
+                # Draw gray circle around highlighted artwork (not black)
                 draw.ellipse([hx - 20, hy - 20, hx + 20, hy + 20],
-                            fill=None, outline=colors["text"], width=2)
+                            fill=None, outline=colors["circle_gray"], width=2)
     
     # Highlight representative (if different from highlighted)
     if representative_idx is not None and shelf0_coords is not None:
@@ -965,9 +1003,12 @@ def create_frame(
                                         mask = Image.fromarray(mask_array.astype(np.uint8))
                                     
                                     # Paste image with circular mask
+                                    # Reposition slightly for better clarity (offset by 5px up and right)
+                                    offset_x = 5
+                                    offset_y = -5
                                     img.paste(thumbnail_resized, 
-                                            (int(x - POINT_SIZE_REPRESENTATIVE), 
-                                             int(y - POINT_SIZE_REPRESENTATIVE)), 
+                                            (int(x - POINT_SIZE_REPRESENTATIVE + offset_x), 
+                                             int(y - POINT_SIZE_REPRESENTATIVE + offset_y)), 
                                             mask)
                                     
                                     # Mark aesthetic representative with bright green circle (only if not already marked as main representative)
@@ -990,17 +1031,158 @@ def create_frame(
                                         # Only draw circle if not already the main representative (which has a larger circle)
                                         if not is_main_rep:
                                             # Draw bright green circle around aesthetic representative (with opacity)
+                                            # Account for thumbnail offset
+                                            offset_x = 5
+                                            offset_y = -5
                                             outline_color = colors["lime"]
                                             if opacity < 1.0:
                                                 outline_color = tuple(int(c * opacity) for c in colors["lime"])
-                                            draw.ellipse([int(x - POINT_SIZE_REPRESENTATIVE - 5), 
-                                                        int(y - POINT_SIZE_REPRESENTATIVE - 5),
-                                                        int(x + POINT_SIZE_REPRESENTATIVE + 5), 
-                                                        int(y + POINT_SIZE_REPRESENTATIVE + 5)],
+                                            draw.ellipse([int(x - POINT_SIZE_REPRESENTATIVE - 5 + offset_x), 
+                                                        int(y - POINT_SIZE_REPRESENTATIVE - 5 + offset_y),
+                                                        int(x + POINT_SIZE_REPRESENTATIVE + 5 + offset_x), 
+                                                        int(y + POINT_SIZE_REPRESENTATIVE + 5 + offset_y)],
                                                        fill=None, outline=outline_color, width=3)
                         except Exception:
                             pass
     
+    
+    # Draw ruler lines from centroid to representative and outlier (ruler step)
+    if step == "ruler" and cx is not None and cy is not None and ruler_progress is not None and shelf0_coords is not None:
+        # Find representative and outlier coordinates
+        rep_coord = None
+        outlier_coord = None
+        rep_distance = None
+        outlier_distance = None
+        
+        shelf0_indices = np.where(shelf0_mask)[0]
+        shelf0_indices_list = [int(x) for x in shelf0_indices.tolist()]
+        
+        if aesthetic_representative_id is not None:
+            for i, aid in enumerate(all_artwork_ids):
+                try:
+                    if (float(aid) == float(aesthetic_representative_id) or 
+                        str(aid) == str(aesthetic_representative_id) or
+                        str(aid).replace('.0', '') == str(aesthetic_representative_id).replace('.0', '')):
+                        if i in shelf0_indices_list:
+                            rep_idx_in_shelf0 = shelf0_indices_list.index(i)
+                            if rep_idx_in_shelf0 < len(shelf0_coords):
+                                rep_coord = shelf0_coords[rep_idx_in_shelf0]
+                                if rep_idx_in_shelf0 < len(distances):
+                                    rep_distance = distances[rep_idx_in_shelf0]
+                        break
+                except (ValueError, TypeError):
+                    if str(aid) == str(aesthetic_representative_id):
+                        if i in shelf0_indices_list:
+                            rep_idx_in_shelf0 = shelf0_indices_list.index(i)
+                            if rep_idx_in_shelf0 < len(shelf0_coords):
+                                rep_coord = shelf0_coords[rep_idx_in_shelf0]
+                                if rep_idx_in_shelf0 < len(distances):
+                                    rep_distance = distances[rep_idx_in_shelf0]
+                        break
+        
+        if aesthetic_outlier_id is not None:
+            for i, aid in enumerate(all_artwork_ids):
+                try:
+                    if (float(aid) == float(aesthetic_outlier_id) or 
+                        str(aid) == str(aesthetic_outlier_id) or
+                        str(aid).replace('.0', '') == str(aesthetic_outlier_id).replace('.0', '')):
+                        if i in shelf0_indices_list:
+                            outlier_idx_in_shelf0 = shelf0_indices_list.index(i)
+                            if outlier_idx_in_shelf0 < len(shelf0_coords):
+                                outlier_coord = shelf0_coords[outlier_idx_in_shelf0]
+                                if outlier_idx_in_shelf0 < len(distances):
+                                    outlier_distance = distances[outlier_idx_in_shelf0]
+                        break
+                except (ValueError, TypeError):
+                    if str(aid) == str(aesthetic_outlier_id):
+                        if i in shelf0_indices_list:
+                            outlier_idx_in_shelf0 = shelf0_indices_list.index(i)
+                            if outlier_idx_in_shelf0 < len(shelf0_coords):
+                                outlier_coord = shelf0_coords[outlier_idx_in_shelf0]
+                                if outlier_idx_in_shelf0 < len(distances):
+                                    outlier_distance = distances[outlier_idx_in_shelf0]
+                        break
+        
+        # Draw ruler line(s)
+        # When ruler_to_rep is True: only draw to representative
+        # When ruler_to_rep is False: draw to both representative (already complete) and outlier (animating)
+        targets_to_draw = []
+        if ruler_to_rep:
+            # Drawing to representative only
+            if rep_coord is not None and rep_distance is not None:
+                targets_to_draw.append((rep_coord, rep_distance, True))  # (coord, distance, is_rep)
+        else:
+            # Drawing to outlier, but also show completed representative line
+            if rep_coord is not None and rep_distance is not None:
+                targets_to_draw.append((rep_coord, rep_distance, True))  # Show completed rep line
+            if outlier_coord is not None and outlier_distance is not None:
+                targets_to_draw.append((outlier_coord, outlier_distance, False))  # Animate outlier line
+        
+        for target_coord, target_distance, is_rep in targets_to_draw:
+            # Use full progress for representative when drawing outlier (it's already complete)
+            line_progress = 1.0 if (not ruler_to_rep and is_rep) else ruler_progress
+            
+            # Calculate intermediate point based on progress
+            tx, ty = target_coord
+            inter_x = cx + (tx - cx) * line_progress
+            inter_y = cy + (ty - cy) * line_progress
+            
+            # Draw main ruler line (green)
+            draw.line([(int(cx), int(cy)), (int(inter_x), int(inter_y))], 
+                     fill=colors["lime"], width=2)
+            
+            # Draw tick marks along the line (ruler style)
+            num_ticks = 10
+            for tick in range(1, num_ticks + 1):
+                tick_progress = (tick / (num_ticks + 1)) * line_progress
+                if tick_progress <= line_progress:
+                    tick_x = cx + (tx - cx) * tick_progress
+                    tick_y = cy + (ty - cy) * tick_progress
+                    
+                    # Calculate perpendicular direction for tick marks
+                    dx = tx - cx
+                    dy = ty - cy
+                    length = np.sqrt(dx*dx + dy*dy)
+                    if length > 0:
+                        # Perpendicular vector (rotate 90 degrees)
+                        perp_x = -dy / length
+                        perp_y = dx / length
+                        tick_length = 8
+                        tick_start_x = tick_x - perp_x * tick_length
+                        tick_start_y = tick_y - perp_y * tick_length
+                        tick_end_x = tick_x + perp_x * tick_length
+                        tick_end_y = tick_y + perp_y * tick_length
+                        draw.line([(int(tick_start_x), int(tick_start_y)), 
+                                  (int(tick_end_x), int(tick_end_y))], 
+                                 fill=colors["lime"], width=1)
+            
+            # Draw distance label at midpoint of visible line (in green)
+            if line_progress > 0.3:  # Only show label when line is partially drawn
+                label_x = cx + (tx - cx) * (line_progress * 0.5)
+                label_y = cy + (ty - cy) * (line_progress * 0.5)
+                
+                # Offset label perpendicular to line
+                dx = tx - cx
+                dy = ty - cy
+                length = np.sqrt(dx*dx + dy*dy)
+                if length > 0:
+                    perp_x = -dy / length
+                    perp_y = dx / length
+                    label_offset = 25
+                    label_x += perp_x * label_offset
+                    label_y += perp_y * label_offset
+                    
+                    # Draw distance text in green
+                    distance_text = f"{target_distance:.4f}"
+                    font_ruler = get_font(FONT_SIZE_INFO, "thin")
+                    # Draw text with slight background for readability
+                    bbox = draw.textbbox((int(label_x), int(label_y)), distance_text, font=font_ruler)
+                    padding = 4
+                    draw.rectangle([bbox[0] - padding, bbox[1] - padding, 
+                                   bbox[2] + padding, bbox[3] + padding],
+                                  fill=colors["background"])
+                    draw.text((int(label_x), int(label_y)), distance_text, 
+                             fill=colors["lime"], font=font_ruler)
     
     # Draw centroid with crosshair design (more elegant than big circle)
     if cx is not None and cy is not None:
@@ -1617,6 +1799,9 @@ def create_frame(
                 except Exception:
                     pass
     
+    # Apply anti-aliasing filter for smoother edges
+    img = img.filter(ImageFilter.SMOOTH_MORE)
+    
     return img
 
 
@@ -1624,16 +1809,16 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     """Main function to generate visualization frames and video.
     
     Args:
-        target_shelf: The shelf number to visualize (as string, e.g., "0", "5")
+        target_shelf: The Regal number to visualize (as string, e.g., "0", "5")
         mode: "representative", "outlier", or "both" - which type to visualize (default: "both")
         white_background: If True, use white background with inverted colors (default: False)
     """
     print("=" * 60)
     if mode == "both":
-        print(f"Visualizing Shelf {target_shelf} Representatives and Outliers")
+        print(f"Visualizing Regal {target_shelf} Representatives and Outliers")
     else:
         mode_title = "Representative" if mode == "representative" else "Outlier"
-        print(f"Visualizing Shelf {target_shelf} {mode_title} Finding Process")
+        print(f"Visualizing Regal {target_shelf} {mode_title} Finding Process")
     print("=" * 60)
     
     # Load data
@@ -1693,7 +1878,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             df[pd.to_numeric(df["shelfNo"], errors='coerce') == target_shelf_num]
         ]).drop_duplicates()
     
-    print(f"   Found {len(df_shelf0)} artworks on shelf {target_shelf}")
+    print(f"   Found {len(df_shelf0)} artworks on Regal {target_shelf}")
     
     # Match embeddings and load thumbnails
     print("\n2. Matching embeddings and loading thumbnails...")
@@ -1744,7 +1929,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     shelf0_mask[shelf0_indices_in_all] = True
     shelf0_embeddings = all_embeddings[shelf0_mask]
     
-    print(f"   Found {len(shelf0_embeddings)} shelf {target_shelf} embeddings")
+    print(f"   Found {len(shelf0_embeddings)} Regal {target_shelf} embeddings")
     
     # Reduce dimensions
     print("\n3. Reducing dimensions...")
@@ -1762,11 +1947,11 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     
     # Get aesthetic IDs from aesthetic.md - these are the curated selections
     REPRESENTATIVES = {
-        0: 464, 1: 152, 2: 161, 3: 376, 4: 450,
+        0: 464, 1: 152, 2: 161, 3: 376, 4: 454,
         5: 360, 6: 468, 7: 107, 8: 389, 9: 185
     }
     OUTLIERS = {
-        0: 479, 1: 386, 2: 334, 3: 82, 4: 424,
+        0: 479, 1: 386, 2: 326, 3: 82, 4: 424,
         5: 310, 6: 93, 7: 96, 8: 343, 9: 441
     }
     target_shelf_int = int(target_shelf) if target_shelf.isdigit() else 0
@@ -1904,18 +2089,18 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     # Project centroid to 2D
     # Use the mean of 2D coordinates directly - this is the most accurate approach
     # because:
-    # 1. The 2D coordinates already correctly represent the shelf items
-    # 2. The mean of 2D coords will be in the center of the shelf cluster
+    # 1. The 2D coordinates already correctly represent the Regal items
+    # 2. The mean of 2D coords will be in the center of the Regal cluster
     # 3. UMAP/t-SNE transform for new points (like the centroid) can be unreliable
     centroid_coord_2d = np.mean(shelf0_coords_2d, axis=0)
-    print(f"   Centroid 2D position calculated as mean of shelf {target_shelf} coordinates")
+    print(f"   Centroid 2D position calculated as mean of Regal {target_shelf} coordinates")
     
     # Validate centroid coordinate
     if len(shelf0_coords_2d) > 0:
         print(f"   Centroid 2D position: ({centroid_coord_2d[0]:.2f}, {centroid_coord_2d[1]:.2f})")
-        print(f"   Shelf {target_shelf} coords range: x=[{shelf0_coords_2d[:, 0].min():.2f}, {shelf0_coords_2d[:, 0].max():.2f}], y=[{shelf0_coords_2d[:, 1].min():.2f}, {shelf0_coords_2d[:, 1].max():.2f}]")
+        print(f"   Regal {target_shelf} coords range: x=[{shelf0_coords_2d[:, 0].min():.2f}, {shelf0_coords_2d[:, 0].max():.2f}], y=[{shelf0_coords_2d[:, 1].min():.2f}, {shelf0_coords_2d[:, 1].max():.2f}]")
     else:
-        print(f"   Warning: No shelf {target_shelf} coordinates found!")
+        print(f"   Warning: No Regal {target_shelf} coordinates found!")
         centroid_coord_2d = np.array([MAP_WIDTH // 2, MAP_HEIGHT // 2])  # Default to center
     
     print(f"   Representative artwork ID: {first_artwork_id}")
@@ -1939,8 +2124,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
         frame_count += 1
     
-    # Step 2: Show shelf items one by one slowly (NO LINES, just identification) with color easing
-    print(f"   Generating step 2: Identifying shelf {target_shelf} items (slow, no lines)...")
+    # Step 2: Show Regal items one by one slowly (NO LINES, just identification) with color easing
+    print(f"   Generating step 2: Identifying Regal {target_shelf} items (slow, no lines)...")
     shelf0_indices_list = np.where(shelf0_mask)[0].tolist()
     num_shelf0 = len(shelf0_indices_list)
     
@@ -1952,12 +2137,18 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         current_artwork_idx_in_all = shelf0_indices_list[artwork_num - 1]
         
         # Generate frames for this artwork - NO lines, NO centroid, just showing the item
+        CIRCLE_EXPAND_FRAMES = 20  # Frames for circle expansion animation
         for i in range(FRAMES_PER_ARTWORK_SLOW):
             # Calculate color ease progress for the currently appearing item
             if i < EASE_IN_FRAMES:
                 color_ease = (i + 1) / EASE_IN_FRAMES
             else:
                 color_ease = None  # Fully appeared, no easing needed
+            
+            # Calculate circle expansion progress (only for the currently appearing item)
+            circle_expand = None
+            if i < CIRCLE_EXPAND_FRAMES:
+                circle_expand = (i + 1) / CIRCLE_EXPAND_FRAMES
             
             img = create_frame("highlight_slow", all_coords_2d, all_artwork_ids, shelf0_mask,
                               white_background=white_background, 
@@ -1970,11 +2161,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               target_shelf=target_shelf,
                               top_representatives=top_items,
                               aesthetic_representative_id=aesthetic_representative_id,
-                              color_ease_progress=color_ease)
+                              color_ease_progress=color_ease,
+                              circle_expand_progress=circle_expand)
             img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
             frame_count += 1
     
-    # Hold final state for a bit - show all shelf items
+    # Hold final state for a bit - show all Regal items
     if num_shelf0 > 0:
         last_artwork_idx = shelf0_indices_list[-1]
         for i in range(FRAMES_PER_STEP // 2):
@@ -1992,8 +2184,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
             frame_count += 1
     
-    # Step 3: Highlight shelf with centroid and distances (combined step) with easing
-    print(f"   Generating step 3: Highlighting shelf {target_shelf} with centroid and distances (with easing)...")
+    # Step 3: Highlight Regal with centroid and distances (combined step) with easing
+    print(f"   Generating step 3: Highlighting Regal {target_shelf} with centroid and distances (with easing)...")
     
     # Animate adding each artwork one by one with lines, centroid, and distances
     EASE_IN_FRAMES_STEP3 = 10  # Frames for easing in each item
@@ -2056,8 +2248,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
             frame_count += 1
     
-    # Step 4: Cycle through each shelf artwork showing calculations
-    print(f"   Generating step 4: Cycling through shelf {target_shelf} artworks...")
+    # Step 4: Cycle through each Regal artwork showing calculations
+    print(f"   Generating step 4: Cycling through Regal {target_shelf} artworks...")
     shelf0_indices_list = np.where(shelf0_mask)[0].tolist()
     # Sort by distance to centroid for better visualization
     # Map shelf 0 indices to their positions in the distances array
@@ -2172,6 +2364,92 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                                   aesthetic_representative_id=aesthetic_representative_id)
                 img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
                 frame_count += 1
+    
+    # Step 5.5: Draw ruler lines from centroid to representative and outlier
+    print("   Generating step 5.5: Drawing ruler lines to representative and outlier...")
+    FRAMES_PER_RULER = 30  # Frames to draw each ruler line
+    
+    # First draw to representative
+    for frame_num in range(FRAMES_PER_RULER):
+        progress = (frame_num + 1) / FRAMES_PER_RULER
+        img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
+                          white_background=white_background,
+                          all_embeddings=all_embeddings,
+                          shelf0_coords=shelf0_coords_2d,
+                          centroid_coord=centroid_coord_2d,
+                          distances=distances,
+                          representative_idx=first_idx_in_all,
+                          df=df,
+                          target_shelf=target_shelf,
+                          top_representatives=top_representatives,
+                          top_outliers=top_outliers,
+                          aesthetic_representative_id=aesthetic_representative_id,
+                          aesthetic_outlier_id=aesthetic_outlier_id,
+                          ruler_progress=progress,
+                          ruler_to_rep=True)
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        frame_count += 1
+    
+    # Hold representative ruler for a moment
+    for i in range(FRAMES_PER_STEP // 2):
+        img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
+                          white_background=white_background,
+                          all_embeddings=all_embeddings,
+                          shelf0_coords=shelf0_coords_2d,
+                          centroid_coord=centroid_coord_2d,
+                          distances=distances,
+                          representative_idx=first_idx_in_all,
+                          df=df,
+                          target_shelf=target_shelf,
+                          top_representatives=top_representatives,
+                          top_outliers=top_outliers,
+                          aesthetic_representative_id=aesthetic_representative_id,
+                          aesthetic_outlier_id=aesthetic_outlier_id,
+                          ruler_progress=1.0,
+                          ruler_to_rep=True)
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        frame_count += 1
+    
+    # Then draw to outlier (while keeping representative line visible)
+    for frame_num in range(FRAMES_PER_RULER):
+        progress = (frame_num + 1) / FRAMES_PER_RULER
+        img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
+                          white_background=white_background,
+                          all_embeddings=all_embeddings,
+                          shelf0_coords=shelf0_coords_2d,
+                          centroid_coord=centroid_coord_2d,
+                          distances=distances,
+                          representative_idx=first_idx_in_all,
+                          df=df,
+                          target_shelf=target_shelf,
+                          top_representatives=top_representatives,
+                          top_outliers=top_outliers,
+                          aesthetic_representative_id=aesthetic_representative_id,
+                          aesthetic_outlier_id=aesthetic_outlier_id,
+                          ruler_progress=progress,
+                          ruler_to_rep=False)
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        frame_count += 1
+    
+    # Hold both rulers visible for a moment
+    for i in range(FRAMES_PER_STEP):
+        img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
+                          white_background=white_background,
+                          all_embeddings=all_embeddings,
+                          shelf0_coords=shelf0_coords_2d,
+                          centroid_coord=centroid_coord_2d,
+                          distances=distances,
+                          representative_idx=first_idx_in_all,
+                          df=df,
+                          target_shelf=target_shelf,
+                          top_representatives=top_representatives,
+                          top_outliers=top_outliers,
+                          aesthetic_representative_id=aesthetic_representative_id,
+                          aesthetic_outlier_id=aesthetic_outlier_id,
+                          ruler_progress=1.0,
+                          ruler_to_rep=False)
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        frame_count += 1
     
     # Step 6: Show top 10 (5 representatives + 5 outliers) appearing one by one with simultaneous line drawing
     print(f"   Generating step 6: Top 10 (5 Representatives + 5 Outliers) appearing one by one...")
@@ -2336,7 +2614,7 @@ Examples:
         "--shelf", "-s",
         type=str,
         default="0",
-        help="The shelf number to visualize (default: 0)"
+        help="The Regal number to visualize (default: 0)"
     )
     parser.add_argument(
         "--mode", "-m",
