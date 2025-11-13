@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<head>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;  /* center horizontally */
+      align-items: center;      /* center vertically */
+      background: white;
+    }
+
+    #plot {
+      border: 1px solid #444;
+    }
+
+    /* outline style when highlighted */
+    g.highlight circle.outline {
+      stroke: limegreen;
+      stroke-width: 2;
+    }
+  </style>
+</head>
+<body>
+<svg id="plot" width="1400" height="900"></svg>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+const svg = d3.select("#plot");
+const width = +svg.attr("width");
+const height = +svg.attr("height");
+
+// how many nearest neighbours per node to connect
+const K = 10;
+const EMB_SIZE = 512; // emb_0 ... emb_511
+
+// helper: extract image path from "image@file://./images/xxx.jpg"
+function parseImagePath(d) {
+  let str = d.thumbnail;
+  if (!str) return null;
+
+  // Replace "/images/" with "/thumbnails/"
+  let uri = str.replace(/\/images\//, "/thumbnails/");
+
+  // Replace extension with ".png"
+  uri = uri.replace(/\.[^.]+$/, ".png");
+
+  return uri;
+}
+
+// helper: squared distance in embedding space
+function embeddingDistanceSquared(a, b) {
+  let sum = 0;
+  const ea = a.emb;
+  const eb = b.emb;
+  for (let i = 0; i < EMB_SIZE; i++) {
+    const diff = ea[i] - eb[i];
+    sum += diff * diff;
+  }
+  return sum;
+}
+
+d3.csv("data.csv", d => {
+  // parse embedding vector
+  const emb = new Array(EMB_SIZE);
+  for (let i = 0; i < EMB_SIZE; i++) {
+    emb[i] = +d[`emb_${i}`];
+  }
+
+  return {
+    artwork_id: d.artwork_id,
+    x: +d.umap_x,
+    y: +d.umap_y,
+    cluster: +d.cluster,       // ⬅️ read cluster as integer
+    img: parseImagePath(d),
+    emb: emb
+  };
+}).then(data => {
+
+  // scales from UMAP to screen (still used just for positioning)
+  const xScale = d3.scaleLinear()
+      .domain(d3.extent(data, d => d.x))
+      .range([60, width - 60]);   // a bit more padding
+
+  const yScale = d3.scaleLinear()
+      .domain(d3.extent(data, d => d.y))
+      .range([height - 60, 60]);
+
+  // base screen positions + random phase for each node (for wobble)
+  data.forEach(d => {
+    d.x0 = xScale(d.x);
+    d.y0 = yScale(d.y);
+    d.phase = Math.random() * 2 * Math.PI;
+    d.xAnim = d.x0;
+    d.yAnim = d.y0;
+    d.hasImage = !!d.img;
+  });
+
+  // --------- build edges between close nodes (KNN in EMBEDDING space) ----------
+  const edges = [];
+  data.forEach((d, i) => {
+    const distances = data.map((e, j) =>
+      i === j ? Infinity : embeddingDistanceSquared(d, e)
+    );
+
+    const neighbors = d3.range(data.length)
+      .sort((a, b) => distances[a] - distances[b])
+      .slice(0, K);
+
+    neighbors.forEach(j => {
+      edges.push({ source: data[i], target: data[j] });
+    });
+  });
+
+  // --------- draw edges ----------
+  const lines = svg.append("g")
+    .attr("stroke", "#aaa")
+    .attr("opacity", 0.3)
+    .attr("stroke-width", 0.5)
+    .selectAll("line")
+    .data(edges)
+    .enter()
+    .append("line");
+
+  // --------- node groups (image + circle fallback + outline) ----------
+  const thumbSize = 18; // px
+  const outlineRadius = thumbSize / 2 + 3;
+
+  const nodeGroups = svg.append("g")
+    .selectAll("g")
+    .data(data)
+    .enter()
+    .append("g");
+
+  // outline circle for highlighting (initially invisible)
+  nodeGroups
+    .append("circle")
+    .attr("class", "outline")
+    .attr("r", outlineRadius)
+    .attr("fill", "none")
+    .attr("stroke", "none");
+
+  // fallback circle (visible only when no image)
+  nodeGroups
+    .append("circle")
+    .attr("class", "fallback")
+    .attr("r", d => d.hasImage ? 0 : 3)
+    .attr("fill", "black");
+
+  // images (only if we have a path)
+  nodeGroups
+    .filter(d => d.img)
+    .append("image")
+    .attr("width", thumbSize)
+    .attr("height", thumbSize)
+    .attr("x", -thumbSize / 2)
+    .attr("y", -thumbSize / 2)
+    .attr("href", d => d.img)
+    .attr("preserveAspectRatio", "xMidYMid slice")
+    .on("error", function(event, d) {
+      d.hasImage = false;
+      d3.select(this).remove();
+      d3.select(this.parentNode).select("circle.fallback")
+        .attr("r", 3);
+    });
+
+  // --------- hover: highlight all nodes with same cluster ----------
+  nodeGroups
+    .on("mouseover", function(event, d) {
+      const c = d.cluster;
+      // raise current group to front
+      d3.select(this).raise();
+      nodeGroups.classed("highlight", nd => nd.cluster === c);
+    })
+    .on("mouseout", function() {
+      nodeGroups.classed("highlight", false);
+    });
+
+  // --------- continuous animation ----------
+  const amplitude = 1;        // wobble radius in pixels
+  const speed = 0.0015;       // wobble speed
+
+  d3.timer(elapsed => {
+    data.forEach(d => {
+      const a = elapsed * speed + d.phase;
+      d.xAnim = d.x0 + Math.sin(a) * amplitude;
+      d.yAnim = d.y0 + Math.cos(a) * amplitude;
+    });
+
+    nodeGroups.attr("transform", d => `translate(${d.xAnim},${d.yAnim})`);
+
+    lines
+      .attr("x1", d => d.source.xAnim)
+      .attr("y1", d => d.source.yAnim)
+      .attr("x2", d => d.target.xAnim)
+      .attr("y2", d => d.target.yAnim);
+  });
+});
+</script>
+</body>
