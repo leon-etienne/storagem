@@ -668,7 +668,7 @@ if __name__ == "__main__":
         print(f"Artworks in stock: 0")
     
     # Save to CSV
-    output_file = "artworks_with_thumbnails_ting.csv"
+    output_file = "artworks_with_thumbnails_leon.csv"
     artworks.to_csv(output_file, index=False)
     print(f"\n✓ Saved to {output_file}")
 

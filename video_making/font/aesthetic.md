@@ -1,187 +1,165 @@
-# Visual Identity Reference
+# Visual Identity & Design System
 
-## Design Principles
-- Clean, Simple, black & white
-- No Emoji
-- No computer science data visualization aesthetic
-- Modern Designer aesthetic
+## Core Principles
+
+- **Clean & Minimal**: Black & white with lime green accent
+- **Modern Designer Aesthetic**: Focus on typography, spacing, and visual hierarchy
+- **No Emoji**: Keep it professional
+
+---
 
 ## Typography
-- **Font**: `video_making/font/NeueHaasUnicaW1G-Regular.ttf`
 
-## Color Palette
-- **Primary Color**: Pure green (RGB: 0, 255, 0) / HTML: "lime"
-- Colors should be simple and follow a pattern related to lime green
-- Keep color usage minimal
+**Font**: Neue Haas Unica W1G (`video_making/font/`)
+- Regular, Light, Medium, Thin weights available
 
-## Technical Requirements
-- Image generation should be smooth (for ffmpeg video conversion)
-- All visualizations should follow these guidelines
-- **Fallback Image**: `video_making/font/no_image.png` (use when artwork image cannot be found)
-
----
-
-## Data Sources
-- **CSV Data**: `artworks_with_thumbnails_ting.csv`
-- **Embeddings**: `embeddings_cache/all_embeddings.pkl`
-- **Artwork ID Field**: Use `id` column from CSV (e.g., "464", "152", "161")
+**Font Sizes**:
+- **Title**: 48pt Medium
+- **Subtitle/Stage**: 28pt Thin (position: 60px from top)
+- **Section Titles** (Top 10, Ruler): 32pt Medium, lime green
+- **Artwork Title**: 24pt Medium
+- **Artist**: 20pt Medium
+- **Info Text**: 18pt Thin
+- **Small Text**: 14pt Thin
+- **Table Text**: 16pt Thin
 
 ---
 
-## Curation Data
+## Colors
 
-### Groups (Regal Clustering)
-- **Group 1**: Regals 1, 5, 9
-- **Group 2**: Regals 3, 4
-- **Group 3**: Regals 2, 6, 7
-- **Group 4**: Regals 0, 8
+**Primary**:
+- Lime Green: RGB(0, 255, 0) - Accent color
+- Black: RGB(0, 0, 0) - Background
+- White: RGB(255, 255, 255) - Text
 
-### Representatives (by Regal)
-| Regal | Artwork ID | Notes |
-|-------|------------|-------|
-| 0     | 464        |       |
-| 1     | 152        |       |
-| 2     | 161        |       |
-| 3     | 376        |       |
-| 4     | 454        |       |
-| 5     | 360        |       |
-| 6     | 468        |       |
-| 7     | 107        |       |
-| 8     | 389        |       |
-| 9     | 185        |       |
+**Secondary**:
+- Basic Dots: RGB(90, 90, 90) / RGB(80, 80, 80)
+- Text Gray: RGB(200, 200, 200) / RGB(150, 150, 150)
+- Connection Lines: RGB(100, 100, 100)
 
-### Outliers (by Regal)
-| Regal | Artwork ID |
-|-------|------------|
-| 0     | 479        |
-| 1     | 386        |
-| 2     | 326        |
-| 3     | 82         |
-| 4     | 424        |
-| 5     | 310        |
-| 6     | 93         |
-| 7     | 96         |
-| 8     | 343        |
-| 9     | 441        |
+**Usage**: Lime green only for highlights, markers, measurements, and section labels.
 
-### Quick Reference (Python Dict Format)
+---
+
+## Layout
+
+**Canvas**: 1920×1080px
+- **Map Area**: 1200px (left)
+- **Panel Area**: 720px (right)
+
+**Positions**:
+- Subtitle: 60px from top
+- Panel content: 60px from top
+- Title: 50px from left, 100px from bottom
+
+---
+
+## Visual Elements
+
+### Points
+- **Basic Dots**: 4px, dark grey (RGB 80-90)
+- **Regal Points**: 8px, lime green
+- **Representative Points**: 40px circular thumbnails
+- **Centroid**: Crosshair (12px circle, 20px lines)
+
+### Lines
+- **Connection Lines**: 1px grey, fade out after highlight stage
+- **Finding Representatives**: 3px green with distance numbers (12pt)
+- **Ruler Lines**: 3px green with tick marks, arrowhead, distance label (32pt)
+- **Top 10 Connections**: 1px green between all pairs
+
+---
+
+## Stages
+
+### 1. All Embeddings
+- 60 frames
+- All points grey
+
+### 2. Identify Regal Items
+- 30 frames per item
+- Items appear one by one with easing
+- No lines or centroid
+
+### 3. Highlight with Centroid
+- 20 frames per item
+- **All green dots from Stage 2 already visible**
+- Lines and centroid animate progressively
+
+### 3.5. Fade Out Lines
+- 30 frames
+- Grey connection lines fade out
+
+### 4. Cycle Through Artworks
+- 25 frames to draw line + hold per artwork
+- Green lines (3px) with distance numbers
+- Subtitle: "Finding Representatives | Distance: X.XXXX" or "Representative Found | Closest to Centroid" / "Outlier Found | Farthest from Centroid"
+
+### 5. Draw Lines from Centroid
+- 30 frames per line
+- Lines drawn one by one
+
+### 6. Top 10 Items
+- 40 frames per item
+- Section titles: "Representatives" / "Outliers" (32pt Medium, lime green)
+- 5 representatives, then 5 outliers appear one by one
+
+### 7. Measuring Distances
+- 50 frames per ruler line
+- **Layout** (right panel):
+  - Image at top (no border)
+  - Section label: 28pt Medium, lime green
+  - **Distance prominently first**: 32pt Medium, lime green
+  - Title: 24pt Medium
+  - Artist: 20pt Medium
+  - Year: 16pt Thin
+  - Divider
+  - Two-column details (ID, Size, Handling Status, Raw Embedding / Delivery Date, Weight)
+
+---
+
+## Info Panel Layout
+
+**Representative Cycling & Ruler Steps**:
+1. Image (200px height, no border)
+2. Divider
+3. Section label (lime green)
+4. Distance (32pt Medium, lime green) - **Ruler step only**
+5. Title (24pt Medium)
+6. Artist (20pt Medium)
+7. Year (16pt Thin)
+8. Divider
+9. Two-column fields
+
+**Top 10 Table**:
+- Section titles: 32pt Medium, lime green
+- Thumbnails: 60px × 60px
+- Font: 16pt Thin
+- Currently appearing item: green highlight
+
+---
+
+## Data
+
+**Files**:
+- CSV: `artworks_with_thumbnails_ting.csv`
+- Embeddings: `embeddings_cache/all_embeddings.pkl`
+- Images: `production-export-2025-11-13t13-42-48-005z/images/`
+
+**Curation**:
 ```python
-GROUPS = {
-    1: [1, 5, 9],
-    2: [3, 4],
-    3: [2, 6, 7],
-    4: [0, 8]
-}
-
-REPRESENTATIVES = {
-    0: 464, 1: 152, 2: 161, 3: 376, 4: 454,
-    5: 360, 6: 468, 7: 107, 8: 389, 9: 185
-}
-
-OUTLIERS = {
-    0: 479, 1: 386, 2: 326, 3: 82, 4: 424,
-    5: 310, 6: 93, 7: 96, 8: 343, 9: 441
-}
+REPRESENTATIVES = {0: 464, 1: 152, 2: 161, 3: 376, 4: 454, 5: 360, 6: 468, 7: 107, 8: 389, 9: 185}
+OUTLIERS = {0: 479, 1: 386, 2: 326, 3: 82, 4: 424, 5: 310, 6: 93, 7: 96, 8: 343, 9: 441}
 ```
 
 ---
 
-## Visualization Requirements
+## Technical
 
-### File Naming System
-- **Frames Directory**: `frames/regal{regal_number}_{mode}/`
-  - Example: `frames/regal0_both/`, `frames/regal0_representative/`, `frames/regal0_outlier/`
-- **Video Output**: `frames/regal{regal_number}_{mode}.mp4`
-  - Example: `regal0_both.mp4`, `regal0_representative.mp4`, `regal0_outlier.mp4`
-- **Mode Options**: `representative`, `outlier`, or `both` (default: both)
+**Video**: 60fps, H.264, CRF 23
+**Output**: `frames/shelf{regal}_both.mp4`
 
-### Visual Elements
-
-#### Points and Circles
-- **Non-Regal points**: White fill, no outline, lower opacity (gray)
-- **Regal points**: 
-  - Highlighted: Bright green fill, no border
-  - Non-highlighted: Lower opacity green fill, no border
-- **Top 10 items**: Circular thumbnail images (40px diameter), no border
-- **Centroid**: Pure white circle (18px radius), white fill and outline
-- **Representatives/Outliers**: Marked with bright green circles
-
-#### Text
-- **Title text**: Displayed next to ALL Regal items (not just highlighted)
-- **Text color**: White on black background
-- **Font weights**: Thin for labels/info, Medium for titles
-
-#### Lines and Connections
-- **Connection lines between Regal items**: Gray, thin, less obvious
-- **Lines from centroid**: Gray (except closest/farthest in green)
-- **Lines between top 10 items**: Bright green lines connecting all pairs of top 10 items (5 representatives + 5 outliers)
-
-#### Top 10 Display (5 Representatives + 5 Outliers)
-- **Images**: Circular thumbnails on map, no borders
-- **Aesthetic item**: Highlighted with bright green circle around image
-- **Table on right side**: Shows Rank, Title, Distance for both Representatives and Outliers sections
-- **Aesthetic item in table**: Highlighted in green
-- **Green lines**: Bright green lines connect all pairs of top 10 items simultaneously
-- **Title**: "Representatives" and "Outliers" as separate section titles (not "Top 10")
-
-#### Zoom Effect
-- **Duration**: 180 frames (6 seconds at 30fps)
-- **Animation**: Smooth ease-in-out easing function
-- **Image quality**: High-resolution images with LANCZOS resampling
-- **Aspect ratio**: Maintained during zoom
-- **Background**: Hides all points and connections during zoom
-
-### Calculation Logic
-
-#### Selection Process
-- Finds **5 closest** artworks to centroid (representatives)
-- Finds **5 farthest** artworks from centroid (outliers)
-- **Aesthetic IDs are guaranteed**: The aesthetic representative and outlier IDs from `REPRESENTATIVES` and `OUTLIERS` dicts are always included in the top 5 lists, even if they don't rank in the top 5 by distance
-- Sorts by distance (closest first for representatives, farthest first for outliers)
-- Uses `REPRESENTATIVES` dict for aesthetic representative item
-- Uses `OUTLIERS` dict for aesthetic outlier item
-
-### Video Generation
-- **FPS**: 60 frames per second
-- **Codec**: H.264 (libx264)
-- **Quality**: CRF 23
-- **Format**: MP4 (yuv420p)
-
-### Visualization Steps
-
-1. **All Embeddings**: Show all artworks as points
-2. **Identify Regal Items**: Highlight Regal items one by one (slow, no lines)
-3. **Centroid & Distances**: Show Regal items with centroid and distance calculations
-4. **Cycle Through Artworks**: Display each artwork with its calculation details
-5. **Draw Lines from Centroid**: Animate lines from centroid to all Regal items
-6. **Top 10 (5 Representatives + 5 Outliers)**: Show top 5 representatives and top 5 outliers appearing one by one with green lines connecting them simultaneously
-7. **Side-by-Side View**: Show selected representative and outlier on left side with images and info, rank table on right side
-
-### Last Step Layout
-- **Left Side**: Both representative and outlier stacked vertically, each with:
-  - Image (centered)
-  - "Representative" or "Outlier" label in green
-  - Title (white, wrapped if needed)
-  - Artist (white)
-  - Year (white)
-- **Right Side**: Rank table showing:
-  - "Representatives" section with top 5 (Rank, Title, Distance)
-  - "Outliers" section with top 5 (Rank, Title, Distance)
-  - Aesthetic items highlighted in green
-
-### Usage
+**Usage**:
 ```bash
-# Generate both representative and outlier video for Regal 0 (default)
 python visualize_shelf0_representative.py --shelf 0 --mode both
-
-# Generate representative video for Regal 0
-python visualize_shelf0_representative.py --shelf 0 --mode representative
-
-# Generate outlier video for Regal 0
-python visualize_shelf0_representative.py --shelf 0 --mode outlier
-
-# Generate for all Regals (both modes)
-for regal in {0..9}; do
-    python visualize_shelf0_representative.py --shelf $regal --mode both
-done
 ```
