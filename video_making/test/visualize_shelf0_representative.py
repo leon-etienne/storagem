@@ -81,6 +81,11 @@ PANEL_WIDTH = 720  # Right side for artwork info
 MAP_HEIGHT = CANVAS_HEIGHT
 PANEL_HEIGHT = CANVAS_HEIGHT
 
+# Anti-aliasing: Use supersampling (render at higher resolution, then downscale)
+SUPERSAMPLE_FACTOR = 2  # Render at 2x resolution for better anti-aliasing
+SUPERSAMPLED_WIDTH = CANVAS_WIDTH * SUPERSAMPLE_FACTOR
+SUPERSAMPLED_HEIGHT = CANVAS_HEIGHT * SUPERSAMPLE_FACTOR
+
 # Visualization parameters
 POINT_SIZE = 4  # Size for regular points
 POINT_SIZE_LARGE = 8  # Size for Regal 0 points
@@ -89,10 +94,11 @@ LINE_WIDTH = 1
 FONT_SIZE_TITLE = 48
 FONT_SIZE_LABEL = 28  # Slightly bigger subtitle
 FONT_SIZE_INFO = 18
-FONT_SIZE_SMALL = 14
-FONT_SIZE_MAP_TEXT = 18  # Larger text for map labels
-FONT_SIZE_TABLE = 16  # Smaller font for top10 and side-by-side tables
+FONT_SIZE_SMALL = 16  # Increased from 14 for better readability in right panel
+FONT_SIZE_MAP_TEXT = 12  # Reduced from 18 - smaller text for map labels on left side
+FONT_SIZE_TABLE = 18  # Increased from 16 - larger font for top10 and side-by-side tables
 FIXED_IMAGE_HEIGHT = 150  # Fixed height for all images in panel (standardized across all stages)
+FIXED_IMAGE_HEIGHT_LARGE = 250  # Larger height for non-ruler steps (to make images bigger)
 
 # Frame generation
 FRAMES_PER_STEP = 60  # Hold each step for 60 frames (2 seconds at 30fps)
@@ -317,8 +323,8 @@ def get_font(size: int, weight: str = "regular") -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-def draw_artwork_title(draw, title: str, panel_x: int, y_pos: int, max_width: int, 
-                       colors: Dict, font_title_large: ImageFont.FreeTypeFont) -> int:
+def draw_artwork_title(draw, title: str, panel_x: int, y_pos: int, max_width: int,
+                       colors: Dict, font_title_large: ImageFont.FreeTypeFont, scale: float = 1.0) -> int:
     """Draw artwork title (large, no label).
     
     Returns:
@@ -341,13 +347,13 @@ def draw_artwork_title(draw, title: str, panel_x: int, y_pos: int, max_width: in
     
     for line in title_lines[:2]:
         draw.text((panel_x, y_pos), line, fill=colors["text"], font=font_title_large)
-        y_pos += 22
-    y_pos += 10
+        y_pos += int(22 * scale)
+    y_pos += int(10 * scale)
     return y_pos
 
 
 def draw_artist_year(draw, artist: str, year: str, panel_x: int, y_pos: int, max_width: int,
-                     colors: Dict, font_side: ImageFont.FreeTypeFont) -> int:
+                     colors: Dict, font_side: ImageFont.FreeTypeFont, scale: float = 1.0) -> int:
     """Draw artist and year (no labels).
     
     Returns:
@@ -360,11 +366,11 @@ def draw_artist_year(draw, artist: str, year: str, panel_x: int, y_pos: int, max
             artist = artist[:-1]
         artist = artist + "..." if artist else "..."
     draw.text((panel_x, y_pos), artist, fill=colors["text"], font=font_side)
-    y_pos += 22
+    y_pos += int(22 * scale)
     
     # Year (no label)
     draw.text((panel_x, y_pos), year, fill=colors["text"], font=font_side)
-    y_pos += 30
+    y_pos += int(30 * scale)
     return y_pos
 
 
@@ -375,32 +381,34 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
                           artwork_idx: Optional[int] = None,
                           distances: Optional[np.ndarray] = None,
                           shelf0_mask: Optional[np.ndarray] = None,
-                          shelf0_indices: Optional[np.ndarray] = None) -> int:
+                          shelf0_indices: Optional[np.ndarray] = None,
+                          scale: float = 1.0) -> int:
     """Draw remaining fields in two-column layout.
     
     Left column: ID, Size, Handling Status, Raw Embedding
     Right column: Delivery Date, Weight, Distance to Centroid
     
     Args:
-        max_width: Maximum width available for the panel (e.g., PANEL_WIDTH - 60 or CANVAS_WIDTH - panel_x - 20)
+        max_width: Maximum width available for the panel (e.g., PANEL_WIDTH_SCALED - 60 or CANVAS_WIDTH_SCALED - panel_x - 20)
+        scale: Scaling factor for supersampling
     
     Returns:
         Updated y_pos after drawing all fields
     """
     col1_x = panel_x
-    col2_x = panel_x + max_width // 2 + 10
+    col2_x = panel_x + max_width // 2 + int(10 * scale)
     col_y_start = y_pos
     col_y = col_y_start
-    max_col_width = max_width // 2 - 10
+    max_col_width = max_width // 2 - int(10 * scale)
     
     # Left column
     # ID
     try:
         artwork_id_int = int(float(artwork.get("id", "N/A")))
         draw.text((col1_x, col_y), "ID", fill=colors["text"], font=font_small)
-        col_y += 18
+        col_y += int(18 * scale)
         draw.text((col1_x, col_y), f"{artwork_id_int}", fill=colors["text"], font=font_side)
-        col_y += 25
+        col_y += int(25 * scale)
     except (ValueError, TypeError):
         pass
     
@@ -408,28 +416,28 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
     size = str(artwork.get("size", "N/A"))
     if size and size != "N/A" and size != "nan":
         draw.text((col1_x, col_y), "Size", fill=colors["text"], font=font_small)
-        col_y += 18
+        col_y += int(18 * scale)
         size_bbox = draw.textbbox((0, 0), size, font=font_side)
         if size_bbox[2] - size_bbox[0] > max_col_width:
             while size and draw.textbbox((0, 0), size + "...", font=font_side)[2] > max_col_width:
                 size = size[:-1]
             size = size + "..." if size else "..."
         draw.text((col1_x, col_y), size, fill=colors["text"], font=font_side)
-        col_y += 25
+        col_y += int(25 * scale)
     
     # Handling Status
     handling_status = str(artwork.get("handling_status", "N/A"))
     if handling_status and handling_status != "N/A" and handling_status != "nan":
         draw.text((col1_x, col_y), "Handling Status", fill=colors["text"], font=font_small)
-        col_y += 18
+        col_y += int(18 * scale)
         draw.text((col1_x, col_y), handling_status, fill=colors["text"], font=font_side)
-        col_y += 25
+        col_y += int(25 * scale)
     
     # Raw Embedding
     if all_embeddings is not None and artwork_idx is not None and artwork_idx < len(all_embeddings):
         emb = all_embeddings[artwork_idx]
         draw.text((col1_x, col_y), "Raw Embedding", fill=colors["text"], font=font_small)
-        col_y += 18
+        col_y += int(18 * scale)
         emb_preview = emb[:8] if len(emb) > 8 else emb
         emb_str = ", ".join([f"{v:.3f}" for v in emb_preview])
         if len(emb) > 8:
@@ -450,8 +458,8 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
             emb_lines.append(current_line)
         for line in emb_lines[:2]:  # Max 2 lines
             draw.text((col1_x, col_y), line, fill=colors["text"], font=font_side)
-            col_y += 18
-        col_y += 8
+            col_y += int(18 * scale)
+        col_y += int(8 * scale)
     
     # Right column
     col_y_right = col_y_start
@@ -460,17 +468,17 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
     delivery_date = str(artwork.get("deliveryDate", "N/A"))
     if delivery_date and delivery_date != "N/A" and delivery_date != "nan":
         draw.text((col2_x, col_y_right), "Delivery Date", fill=colors["text"], font=font_small)
-        col_y_right += 18
+        col_y_right += int(18 * scale)
         draw.text((col2_x, col_y_right), delivery_date, fill=colors["text"], font=font_side)
-        col_y_right += 25
+        col_y_right += int(25 * scale)
     
     # Weight
     weight = str(artwork.get("weight", "N/A"))
     if weight and weight != "N/A" and weight != "nan":
         draw.text((col2_x, col_y_right), "Weight", fill=colors["text"], font=font_small)
-        col_y_right += 18
+        col_y_right += int(18 * scale)
         draw.text((col2_x, col_y_right), weight, fill=colors["text"], font=font_side)
-        col_y_right += 25
+        col_y_right += int(25 * scale)
     
     # Distance
     if distances is not None and artwork_idx is not None and shelf0_mask is not None:
@@ -480,12 +488,12 @@ def draw_two_column_fields(draw, artwork, panel_x: int, y_pos: int, max_width: i
             if shelf0_idx < len(distances):
                 distance = distances[shelf0_idx]
                 draw.text((col2_x, col_y_right), "Distance to Centroid", fill=colors["text"], font=font_small)
-                col_y_right += 18
+                col_y_right += int(18 * scale)
                 draw.text((col2_x, col_y_right), f"{distance:.4f}", fill=colors["lime"], font=font_side)
-                col_y_right += 25
+                col_y_right += int(25 * scale)
     
     # Return max of both columns
-    return max(col_y, col_y_right) + 10
+    return max(col_y, col_y_right) + int(10 * scale)
 
 
 def create_frame(
@@ -518,7 +526,8 @@ def create_frame(
     ruler_to_rep: bool = True,  # True for drawing to representative, False for outlier
     connection_lines_opacity: Optional[float] = None,  # 0.0 to 1.0 for fading connection lines
     current_distance: Optional[float] = None,  # Current distance being displayed
-    search_mode: Optional[str] = None  # "representative" or "outlier"
+    search_mode: Optional[str] = None,  # "representative" or "outlier"
+    supersample_factor: float = 2.0,  # Supersampling factor for anti-aliasing (1.0 = no supersampling, 2.0 = 2x resolution)
 ) -> Image.Image:
     """Create a single frame for the visualization."""
     # Validate representative_idx - if it's a DataFrame or invalid, set to None
@@ -538,15 +547,45 @@ def create_frame(
     # Get color scheme based on background mode
     colors = get_colors(white_background)
     
-    # Create canvas with transparent background (RGBA)
-    img = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (*colors["background"], 255))
+    # Create canvas at supersampled resolution for better anti-aliasing
+    # We'll render at higher resolution and then downscale for smooth edges
+    SUPERSAMPLED_WIDTH_LOCAL = int(CANVAS_WIDTH * supersample_factor)
+    SUPERSAMPLED_HEIGHT_LOCAL = int(CANVAS_HEIGHT * supersample_factor)
+    img = Image.new("RGBA", (SUPERSAMPLED_WIDTH_LOCAL, SUPERSAMPLED_HEIGHT_LOCAL), (*colors["background"], 255))
     draw = ImageDraw.Draw(img)
     
-    # Load fonts with appropriate weights - Thin as standard
-    font_title = get_font(FONT_SIZE_TITLE, "medium")  # Medium for titles to stand out
-    font_label = get_font(FONT_SIZE_LABEL, "thin")  # Thin for labels
-    font_info = get_font(FONT_SIZE_INFO, "thin")  # Thin for info text
-    font_small = get_font(FONT_SIZE_SMALL, "thin")  # Thin for small text
+    # Scale all coordinates and sizes for supersampled canvas
+    scale = supersample_factor
+    
+    # Scale coordinate arrays
+    all_coords = all_coords * scale
+    if shelf0_coords is not None:
+        shelf0_coords = shelf0_coords * scale
+    if shelf0_coords_progressive is not None:
+        shelf0_coords_progressive = shelf0_coords_progressive * scale
+    if centroid_coord is not None:
+        centroid_coord = (centroid_coord[0] * scale, centroid_coord[1] * scale) if isinstance(centroid_coord, (tuple, list)) else centroid_coord * scale
+    
+    # Scale size constants
+    POINT_SIZE_SCALED = POINT_SIZE * scale
+    POINT_SIZE_LARGE_SCALED = POINT_SIZE_LARGE * scale
+    POINT_SIZE_REPRESENTATIVE_SCALED = POINT_SIZE_REPRESENTATIVE * scale
+    LINE_WIDTH_SCALED = LINE_WIDTH * scale
+    RULER_DOT_SIZE_SCALED = 16 * scale if step == "ruler" else None
+    
+    # Scale dimension constants
+    MAP_WIDTH_SCALED = MAP_WIDTH * scale
+    PANEL_WIDTH_SCALED = PANEL_WIDTH * scale
+    MAP_HEIGHT_SCALED = MAP_HEIGHT * scale
+    PANEL_HEIGHT_SCALED = PANEL_HEIGHT * scale
+    CANVAS_WIDTH_SCALED = SUPERSAMPLED_WIDTH_LOCAL
+    CANVAS_HEIGHT_SCALED = SUPERSAMPLED_HEIGHT_LOCAL
+    
+    # Load fonts with appropriate weights - scale font sizes for supersampled canvas
+    font_title = get_font(int(FONT_SIZE_TITLE * scale), "medium")  # Medium for titles to stand out
+    font_label = get_font(int(FONT_SIZE_LABEL * scale), "thin")  # Thin for labels
+    font_info = get_font(int(FONT_SIZE_INFO * scale), "thin")  # Thin for info text
+    font_small = get_font(int(FONT_SIZE_SMALL * scale), "thin")  # Thin for small text
     
     # Draw step label (subtitle) at top
     step_labels = {
@@ -615,22 +654,22 @@ def create_frame(
         except (ValueError, TypeError, IndexError, AttributeError):
             pass
     
-    draw.text((50, 60), step_text, fill=colors["text_secondary"], font=font_label)
+    draw.text((50 * scale, 60 * scale), step_text, fill=colors["text_secondary"], font=font_label)
     
     # Draw title at left side, higher up
     title_text = f"Regal {target_shelf}"
-    title_x = 50  # Left side
-    title_y = CANVAS_HEIGHT - 100  # Higher up from bottom
+    title_x = 50 * scale  # Left side
+    title_y = CANVAS_HEIGHT_SCALED - 100 * scale  # Higher up from bottom
     draw.text((title_x, title_y), title_text, fill=colors["text"], font=font_title)
     
     # Draw calculation info panel FIRST (so it's behind the divider line)
     # This ensures the panel background is drawn before other elements
     if highlighted_artwork_idx is not None and df is not None:
         # Draw background for panel (consistent with main canvas)
-        draw.rectangle([MAP_WIDTH, 0, CANVAS_WIDTH, CANVAS_HEIGHT], fill=colors["background"])
+        draw.rectangle([MAP_WIDTH_SCALED, 0, CANVAS_WIDTH_SCALED, CANVAS_HEIGHT_SCALED], fill=colors["background"])
     
     # Draw divider line - draw AFTER panel background
-    draw.line([(MAP_WIDTH, 0), (MAP_WIDTH, CANVAS_HEIGHT)], fill=colors["text"], width=2)
+    draw.line([(MAP_WIDTH_SCALED, 0), (MAP_WIDTH_SCALED, CANVAS_HEIGHT_SCALED)], fill=colors["text"], width=LINE_WIDTH_SCALED * 2)
     
     # Draw all points (fill, no stroke for non-Regal items) with lower opacity
     # In "all" step, draw ALL points as gray (including Regal ones)
@@ -638,11 +677,11 @@ def create_frame(
     for i, (x, y) in enumerate(all_coords):
         if step == "all":
             # In "all" step, draw everything as gray
-            draw.ellipse([x - POINT_SIZE, y - POINT_SIZE, x + POINT_SIZE, y + POINT_SIZE],
+            draw.ellipse([x - POINT_SIZE_SCALED, y - POINT_SIZE_SCALED, x + POINT_SIZE_SCALED, y + POINT_SIZE_SCALED],
                        fill=colors["point_low_opacity"], outline=None, width=0)
         elif not shelf0_mask[i]:
             # In other steps, only draw non-Regal points as gray
-            draw.ellipse([x - POINT_SIZE, y - POINT_SIZE, x + POINT_SIZE, y + POINT_SIZE],
+            draw.ellipse([x - POINT_SIZE_SCALED, y - POINT_SIZE_SCALED, x + POINT_SIZE_SCALED, y + POINT_SIZE_SCALED],
                        fill=colors["point_low_opacity"], outline=None, width=0)
     
     # Draw lines BEFORE green circles (so they appear behind)
@@ -672,7 +711,7 @@ def create_frame(
                     for j in range(i + 1, min(num_to_show, len(coords_to_use))):
                         x1, y1 = coords_to_use[i]
                         x2, y2 = coords_to_use[j]
-                        draw.line([(x1, y1), (x2, y2)], fill=line_color, width=LINE_WIDTH)
+                        draw.line([(x1, y1), (x2, y2)], fill=line_color, width=LINE_WIDTH_SCALED)
     
     # Extract centroid coordinates (needed for lines)
     cx, cy = None, None
@@ -683,8 +722,8 @@ def create_frame(
             elif isinstance(centroid_coord, (tuple, list)) and len(centroid_coord) >= 2:
                 cx, cy = float(centroid_coord[0]), float(centroid_coord[1])
             if cx is not None and cy is not None:
-                cx = max(50, min(cx, MAP_WIDTH - 50))
-                cy = max(100, min(cy, MAP_HEIGHT - 50))
+                cx = max(50 * scale, min(cx, MAP_WIDTH_SCALED - 50 * scale))
+                cy = max(100 * scale, min(cy, MAP_HEIGHT_SCALED - 50 * scale))
         except (ValueError, TypeError, IndexError, AttributeError):
             cx, cy = None, None
     
@@ -714,7 +753,7 @@ def create_frame(
                         line_width = 3  # Thicker line for representative step
                     else:
                         line_color = colors["connection"]
-                        line_width = LINE_WIDTH
+                        line_width = LINE_WIDTH_SCALED
                     draw.line([(x1, y1), (inter_x, inter_y)], fill=line_color, width=line_width)
                     
                     # Add small numbers on the side of the line (for representative step)
@@ -735,11 +774,11 @@ def create_frame(
                             
                             # Draw distance number in small font
                             if current_distance is not None:
-                                font_small_num = get_font(12, "thin")
+                                font_small_num = get_font(int(12 * scale), "thin")
                                 num_text = f"{current_distance:.3f}"
                                 # Draw with background for readability
                                 bbox = draw.textbbox((num_x, num_y), num_text, font=font_small_num)
-                                padding = 2
+                                padding = int(2 * scale)
                                 draw.rectangle(
                                     [bbox[0] - padding, bbox[1] - padding,
                                      bbox[2] + padding, bbox[3] + padding],
@@ -769,7 +808,7 @@ def create_frame(
                     
                     for i in range(min(num_to_show, len(coords_to_use))):
                         x, y = coords_to_use[i]
-                        draw.line([(cx, cy), (x, y)], fill=line_color, width=LINE_WIDTH)
+                        draw.line([(cx, cy), (x, y)], fill=line_color, width=LINE_WIDTH_SCALED)
     
     # Draw expanding gray circle for highlight_slow and highlight steps (BEFORE green circle)
     if step in ["highlight_slow", "highlight"] and highlighted_artwork_idx is not None and shelf0_coords is not None and circle_expand_progress is not None:
@@ -802,22 +841,31 @@ def create_frame(
     # Draw Regal 0 points (lime green, larger) with title text
     # If progressive mode, only show up to num_shelf0_shown
     # EXCEPTION: In "highlight" step, show ALL items (from shelf0_coords) regardless of num_shelf0_shown
-    if shelf0_coords_progressive is not None and num_shelf0_shown is not None:
+    # IMPORTANT: In "all" step, DO NOT draw shelf0 points here (they're already drawn as grey above)
+    if step != "all" and shelf0_coords_progressive is not None and num_shelf0_shown is not None:
         # In highlight step, show all items from shelf0_coords (all identified items)
+        # In highlight_slow step, ONLY show items up to num_shelf0_shown (progressive)
         # In other steps, use progressive mode
-        coords_for_dots = shelf0_coords if (step == "highlight" and shelf0_coords is not None) else shelf0_coords_progressive
-        num_dots_to_show = len(coords_for_dots) if step == "highlight" else num_shelf0_shown
+        if step == "highlight":
+            coords_for_dots = shelf0_coords if shelf0_coords is not None else shelf0_coords_progressive
+            num_dots_to_show = len(coords_for_dots)
+        else:
+            # For highlight_slow and other steps, use progressive coords
+            coords_for_dots = shelf0_coords_progressive
+            num_dots_to_show = num_shelf0_shown
         
         # Progressive mode: show artworks being added one by one
         # In highlight_slow step, show all items up to num_shelf0_shown (they stay visible once identified)
         # In highlight step, show all items that have been identified
-        for i, (x, y) in enumerate(coords_for_dots):
-            # In highlight_slow step, show all items from 0 to num_shelf0_shown - 1 (they stay visible)
+        # IMPORTANT: Only iterate up to num_dots_to_show to prevent showing too many items
+        for i, (x, y) in enumerate(coords_for_dots[:num_dots_to_show]):
+            # In highlight_slow step, we've already limited to num_dots_to_show, so no need for additional check
+            # But keep the check for safety
             if step == "highlight_slow":
                 if i >= num_shelf0_shown:
-                    continue  # Skip items not yet identified
+                    continue  # Skip items not yet identified (shouldn't happen due to slice, but keep for safety)
             elif i >= num_dots_to_show:
-                continue  # Skip items beyond what should be shown
+                continue  # Skip items beyond what should be shown (shouldn't happen due to slice, but keep for safety)
             
             shelf0_indices = np.where(shelf0_mask)[0]
             is_highlighted = (highlighted_artwork_idx is not None and 
@@ -849,11 +897,12 @@ def create_frame(
                     # In highlight_slow step, previously identified items stay fully green
                     current_color = colors["lime"]
                 else:
-                    # New item - use low opacity (shouldn't happen in highlight_slow, but keep for safety)
+                    # This should not happen in highlight_slow - all items up to num_shelf0_shown should be shown
+                    # But if it does, use low opacity
                     current_color = colors["lime_low_opacity"]
             
-            draw.ellipse([x - POINT_SIZE_LARGE, y - POINT_SIZE_LARGE, 
-                        x + POINT_SIZE_LARGE, y + POINT_SIZE_LARGE],
+            draw.ellipse([x - POINT_SIZE_LARGE_SCALED, y - POINT_SIZE_LARGE_SCALED, 
+                        x + POINT_SIZE_LARGE_SCALED, y + POINT_SIZE_LARGE_SCALED],
                        fill=current_color, outline=None, width=0)
         
         # Draw title text for Regal items
@@ -894,14 +943,14 @@ def create_frame(
                             title = str(artwork_row.iloc[0].get("title", ""))
                             if title and title != "nan":
                                 # Draw title text to the right of the point
-                                text_x = x + POINT_SIZE_LARGE + 5
-                                text_y = y - 10
-                                font_map_text = get_font(FONT_SIZE_MAP_TEXT, "thin")
-                                draw.text((text_x, text_y), title, fill=colors["text"], font=font_map_text)
+                                text_x = x + POINT_SIZE_LARGE_SCALED + 5 * scale
+                                text_y = y - 10 * scale
+                                font_map_text = get_font(int(FONT_SIZE_MAP_TEXT * scale), "thin")
+                                draw.text((int(text_x), int(text_y)), title, fill=colors["text"], font=font_map_text)
                 except Exception:
                     pass
-    elif shelf0_coords is not None:
-        # Normal mode: show all Regal 0 points
+    elif step != "all" and shelf0_coords is not None:
+        # Normal mode: show all Regal 0 points (but not in "all" step)
         for idx, (x, y) in enumerate(shelf0_coords):
             shelf0_indices = np.where(shelf0_mask)[0]
             is_highlighted = (highlighted_artwork_idx is not None and 
@@ -910,12 +959,12 @@ def create_frame(
             
             # Use green fill with no border for highlighted, lower opacity for others
             if is_highlighted:
-                draw.ellipse([x - POINT_SIZE_LARGE, y - POINT_SIZE_LARGE, 
-                            x + POINT_SIZE_LARGE, y + POINT_SIZE_LARGE],
+                draw.ellipse([x - POINT_SIZE_LARGE_SCALED, y - POINT_SIZE_LARGE_SCALED, 
+                            x + POINT_SIZE_LARGE_SCALED, y + POINT_SIZE_LARGE_SCALED],
                            fill=colors["lime"], outline=None, width=0)
             else:
-                draw.ellipse([x - POINT_SIZE_LARGE, y - POINT_SIZE_LARGE, 
-                            x + POINT_SIZE_LARGE, y + POINT_SIZE_LARGE],
+                draw.ellipse([x - POINT_SIZE_LARGE_SCALED, y - POINT_SIZE_LARGE_SCALED, 
+                            x + POINT_SIZE_LARGE_SCALED, y + POINT_SIZE_LARGE_SCALED],
                            fill=colors["lime_low_opacity"], outline=None, width=0)
             
             # Draw title text for all Regal items
@@ -933,10 +982,10 @@ def create_frame(
                             title = str(artwork_row.iloc[0].get("title", ""))
                             if title and title != "nan":
                                 # Draw title text to the right of the point
-                                text_x = x + POINT_SIZE_LARGE + 5
-                                text_y = y - 10
-                                font_map_text = get_font(FONT_SIZE_MAP_TEXT, "thin")
-                                draw.text((text_x, text_y), title, fill=colors["text"], font=font_map_text)
+                                text_x = x + POINT_SIZE_LARGE_SCALED + 5 * scale
+                                text_y = y - 10 * scale
+                                font_map_text = get_font(int(FONT_SIZE_MAP_TEXT * scale), "thin")
+                                draw.text((int(text_x), int(text_y)), title, fill=colors["text"], font=font_map_text)
                 except Exception:
                     pass
     
@@ -1086,68 +1135,74 @@ def create_frame(
             
             # Draw thumbnail at the very top first - standardized layout
             image = load_image(artwork.get("thumbnail", ""))
-            panel_x = MAP_WIDTH + 30
-            y_pos = 60  # Standardized start position
+            panel_x = MAP_WIDTH_SCALED + 30 * scale
+            y_pos = 60 * scale  # Standardized start position
             
             if image:
-                # Fixed height, maintain aspect ratio - standardized size
+                # Use larger image for non-ruler steps, standard size for ruler step
+                # Use high-quality LANCZOS resampling for better image quality
+                # Scale image height for supersampled canvas
                 img_w, img_h = image.size
-                ratio = FIXED_IMAGE_HEIGHT / img_h
-                new_w, new_h = int(img_w * ratio), FIXED_IMAGE_HEIGHT
+                base_image_height = FIXED_IMAGE_HEIGHT_LARGE if step != "ruler" else FIXED_IMAGE_HEIGHT
+                image_height = int(base_image_height * scale)
+                ratio = image_height / img_h
+                new_w, new_h = int(img_w * ratio), image_height
+                # Use LANCZOS for best quality (already set, but ensure it's used)
                 image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
                 
                 # No border - paste image directly
-                img_x = MAP_WIDTH + (PANEL_WIDTH - image.width) // 2
+                img_x = MAP_WIDTH_SCALED + (PANEL_WIDTH_SCALED - image.width) // 2
                 # Paste image - need to use alpha composite if image has alpha, otherwise direct paste
                 if image.mode == 'RGBA':
                     img.paste(image, (img_x, y_pos), image)
                 else:
                     img.paste(image, (img_x, y_pos))
-                y_pos += image.height + 20  # Standardized spacing
+                y_pos += image.height + 20 * scale  # Standardized spacing
             else:
-                y_pos += 20
+                y_pos += 20 * scale
             
             # Draw divider line after image - standardized spacing
-            draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], 
-                     fill=colors["text"], width=1)
-            y_pos += 20  # Standardized spacing
+            draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
+                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+            y_pos += 20 * scale  # Standardized spacing
             
             # Standardized font sizes
-            font_section = get_font(FONT_SIZE_TABLE, "thin")
+            font_section = get_font(int(FONT_SIZE_TABLE * scale), "thin")
             
             # Title - standardized size
-            font_title_large = get_font(20, "medium")  # Standardized: 20pt Medium
+            font_title_large = get_font(int(20 * scale), "medium")  # Standardized: 20pt Medium
             title = str(artwork.get("title", "Unknown"))
-            max_title_width = PANEL_WIDTH - 60
-            y_pos = draw_artwork_title(draw, title, panel_x, y_pos, max_title_width, colors, font_title_large)
+            max_title_width = PANEL_WIDTH_SCALED - 60 * scale
+            y_pos = draw_artwork_title(draw, title, panel_x, y_pos, max_title_width, colors, font_title_large, scale)
             
             # Artist and Year - standardized sizes
             artist = str(artwork.get("artist", "Unknown"))
             year = str(artwork.get("year", "N/A"))
-            max_artist_width = PANEL_WIDTH - 60
+            max_artist_width = PANEL_WIDTH_SCALED - 60 * scale
             # Draw artist with standardized font
-            font_artist = get_font(16, "medium")  # Standardized: 16pt Medium
+            font_artist = get_font(int(16 * scale), "medium")  # Standardized: 16pt Medium
             artist_bbox = draw.textbbox((0, 0), artist, font=font_artist)
             if artist_bbox[2] - artist_bbox[0] > max_artist_width:
                 while artist and draw.textbbox((0, 0), artist + "...", font=font_artist)[2] > max_artist_width:
                     artist = artist[:-1]
                 artist = artist + "..." if artist else "..."
             draw.text((panel_x, y_pos), artist, fill=colors["text"], font=font_artist)
-            y_pos += 22  # Standardized spacing
+            y_pos += 22 * scale  # Standardized spacing
             # Year with standardized font
             draw.text((panel_x, y_pos), year, fill=colors["text"], font=font_section)
-            y_pos += 25  # Standardized spacing
+            y_pos += 25 * scale  # Standardized spacing
             
             # Divider before two-column fields - standardized layout
-            draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], 
-                     fill=colors["text"], width=1)
-            y_pos += 20  # Standardized spacing
+            draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
+                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+            y_pos += 20 * scale  # Standardized spacing
             
             # Two column layout for remaining fields - standardized layout (distance included here)
-            max_width = PANEL_WIDTH - 60
+            max_width = PANEL_WIDTH_SCALED - 60 * scale
             y_pos = draw_two_column_fields(
                 draw, artwork, panel_x, y_pos, max_width,
                 colors, font_small, font_section,
+                scale=scale,
                 all_embeddings=all_embeddings,
                 artwork_idx=highlighted_artwork_idx,
                 distances=distances,
@@ -1157,13 +1212,13 @@ def create_frame(
             # Description (wrapped text) with label - standardized spacing
             description = str(artwork.get("description", ""))
             if description and description != "nan" and description.strip():
-                y_pos += 10  # Standardized spacing
-                draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], 
-                         fill=colors["text"], width=1)
-                y_pos += 20  # Standardized spacing
+                y_pos += 10 * scale  # Standardized spacing
+                draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
+                         fill=colors["text"], width=LINE_WIDTH_SCALED)
+                y_pos += 20 * scale  # Standardized spacing
                 draw.text((panel_x, y_pos), "Description", fill=colors["text"], font=font_small)
-                y_pos += 20  # Standardized spacing
-                max_width = PANEL_WIDTH - 60
+                y_pos += 20 * scale  # Standardized spacing
+                max_width = PANEL_WIDTH_SCALED - 60 * scale
                 words = description.split()
                 lines = []
                 current_line = ""
@@ -1181,18 +1236,18 @@ def create_frame(
                 
                 for line in lines[:6]:  # Limit to 6 lines
                     draw.text((panel_x, y_pos), line, fill=colors["text"], font=font_small)
-                    y_pos += 18  # Standardized spacing
-                y_pos += 15  # Standardized spacing
+                    y_pos += 18 * scale  # Standardized spacing
+                y_pos += 15 * scale  # Standardized spacing
             
             # Internal Note (wrapped text) with label - standardized spacing
             internal_note = str(artwork.get("internalNote", ""))
             if internal_note and internal_note != "nan" and internal_note.strip():
-                draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], 
-                         fill=colors["text"], width=1)
-                y_pos += 20  # Standardized spacing
+                draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
+                         fill=colors["text"], width=LINE_WIDTH_SCALED)
+                y_pos += 20 * scale  # Standardized spacing
                 draw.text((panel_x, y_pos), "Internal Note", fill=colors["text"], font=font_small)
-                y_pos += 20  # Standardized spacing
-                max_width = PANEL_WIDTH - 60
+                y_pos += 20 * scale  # Standardized spacing
+                max_width = PANEL_WIDTH_SCALED - 60 * scale
                 words = internal_note.split()
                 lines = []
                 current_line = ""
@@ -1210,7 +1265,7 @@ def create_frame(
                 
                 for line in lines[:4]:  # Limit to 4 lines
                     draw.text((panel_x, y_pos), line, fill=colors["text"], font=font_small)
-                    y_pos += 18  # Standardized spacing
+                    y_pos += 18 * scale  # Standardized spacing
     
     # Draw top 10 representatives with images on circles (with easing support)
     if step == "representatives" and top_representatives is not None and shelf0_coords is not None:
@@ -1256,7 +1311,7 @@ def create_frame(
                                 
                                 if thumbnail:
                                     # Resize image to fit circle
-                                    size = POINT_SIZE_REPRESENTATIVE * 2
+                                    size = POINT_SIZE_REPRESENTATIVE_SCALED * 2
                                     thumbnail_resized = thumbnail.resize((size, size), Image.Resampling.LANCZOS)
                                     
                                     # Apply opacity if easing
@@ -1281,8 +1336,8 @@ def create_frame(
                                     offset_x = 5
                                     offset_y = -5
                                     img.paste(thumbnail_resized, 
-                                            (int(x - POINT_SIZE_REPRESENTATIVE + offset_x), 
-                                             int(y - POINT_SIZE_REPRESENTATIVE + offset_y)), 
+                                            (int(x - POINT_SIZE_REPRESENTATIVE_SCALED + offset_x), 
+                                             int(y - POINT_SIZE_REPRESENTATIVE_SCALED + offset_y)), 
                                             mask)
                                     
                                     # Mark aesthetic representative with bright green circle (only if not already marked as main representative)
@@ -1311,10 +1366,10 @@ def create_frame(
                                             outline_color = colors["lime"]
                                             if opacity < 1.0:
                                                 outline_color = tuple(int(c * opacity) for c in colors["lime"])
-                                            draw.ellipse([int(x - POINT_SIZE_REPRESENTATIVE - 5 + offset_x), 
-                                                        int(y - POINT_SIZE_REPRESENTATIVE - 5 + offset_y),
-                                                        int(x + POINT_SIZE_REPRESENTATIVE + 5 + offset_x), 
-                                                        int(y + POINT_SIZE_REPRESENTATIVE + 5 + offset_y)],
+                                            draw.ellipse([int(x - POINT_SIZE_REPRESENTATIVE_SCALED - 5 + offset_x), 
+                                                        int(y - POINT_SIZE_REPRESENTATIVE_SCALED - 5 + offset_y),
+                                                        int(x + POINT_SIZE_REPRESENTATIVE_SCALED + 5 + offset_x), 
+                                                        int(y + POINT_SIZE_REPRESENTATIVE_SCALED + 5 + offset_y)],
                                                        fill=None, outline=outline_color, width=3)
                         except Exception:
                             pass
@@ -1477,24 +1532,127 @@ def create_frame(
                     
                     # Draw distance text in green with better styling
                     distance_text = f"{target_distance:.4f}"
-                    font_ruler = get_font(FONT_SIZE_LABEL, "medium")  # Larger, bolder font
+                    font_ruler = get_font(int(FONT_SIZE_LABEL * scale), "medium")  # Larger, bolder font
                     
                     # Draw text with rounded background for better readability
                     bbox = draw.textbbox((int(label_x), int(label_y)), distance_text, font=font_ruler)
-                    padding = 8
+                    padding = int(8 * scale)
                     # Draw background rectangle with rounded corners effect (using multiple rectangles)
                     bg_rect = [bbox[0] - padding, bbox[1] - padding, 
                               bbox[2] + padding, bbox[3] + padding]
-                    draw.rectangle(bg_rect, fill=colors["background"], outline=colors["lime"], width=2)
+                    draw.rectangle(bg_rect, fill=colors["background"], outline=colors["lime"], width=int(2 * scale))
                     
                     # Draw text on top
                     draw.text((int(label_x), int(label_y)), distance_text, 
                              fill=colors["lime"], font=font_ruler)
     
+    # Make representative and outlier dots and text more visible during ruler step
+    if step == "ruler" and shelf0_coords is not None and df is not None:
+        shelf0_indices = np.where(shelf0_mask)[0]
+        shelf0_indices_list = [int(x) for x in shelf0_indices.tolist()]
+        
+        # Find representative and outlier indices
+        rep_idx_in_shelf0 = None
+        outlier_idx_in_shelf0 = None
+        
+        if aesthetic_representative_id is not None:
+            for i, aid in enumerate(all_artwork_ids):
+                try:
+                    if (float(aid) == float(aesthetic_representative_id) or 
+                        str(aid) == str(aesthetic_representative_id) or
+                        str(aid).replace('.0', '') == str(aesthetic_representative_id).replace('.0', '')):
+                        if i in shelf0_indices_list:
+                            rep_idx_in_shelf0 = shelf0_indices_list.index(i)
+                        break
+                except (ValueError, TypeError):
+                    if str(aid) == str(aesthetic_representative_id):
+                        if i in shelf0_indices_list:
+                            rep_idx_in_shelf0 = shelf0_indices_list.index(i)
+                        break
+        
+        if aesthetic_outlier_id is not None:
+            for i, aid in enumerate(all_artwork_ids):
+                try:
+                    if (float(aid) == float(aesthetic_outlier_id) or 
+                        str(aid) == str(aesthetic_outlier_id) or
+                        str(aid).replace('.0', '') == str(aesthetic_outlier_id).replace('.0', '')):
+                        if i in shelf0_indices_list:
+                            outlier_idx_in_shelf0 = shelf0_indices_list.index(i)
+                        break
+                except (ValueError, TypeError):
+                    if str(aid) == str(aesthetic_outlier_id):
+                        if i in shelf0_indices_list:
+                            outlier_idx_in_shelf0 = shelf0_indices_list.index(i)
+                        break
+        
+        # Draw larger, brighter dots for representative and outlier
+        for idx_in_shelf0, coord in enumerate(shelf0_coords):
+            if idx_in_shelf0 == rep_idx_in_shelf0 or idx_in_shelf0 == outlier_idx_in_shelf0:
+                x, y = coord
+                # Draw larger bright green dot
+                draw.ellipse([x - RULER_DOT_SIZE_SCALED, y - RULER_DOT_SIZE_SCALED, 
+                            x + RULER_DOT_SIZE_SCALED, y + RULER_DOT_SIZE_SCALED],
+                           fill=colors["lime"], outline=None, width=0)
+                # Draw bright green circle around it
+                draw.ellipse([x - RULER_DOT_SIZE_SCALED - 5 * scale, y - RULER_DOT_SIZE_SCALED - 5 * scale, 
+                            x + RULER_DOT_SIZE_SCALED + 5 * scale, y + RULER_DOT_SIZE_SCALED + 5 * scale],
+                           fill=None, outline=colors["lime"], width=3 * scale)
+        
+        # Draw larger, more visible text labels for representative and outlier
+        if rep_idx_in_shelf0 is not None and rep_idx_in_shelf0 < len(shelf0_coords):
+            x, y = shelf0_coords[rep_idx_in_shelf0]
+            try:
+                artwork_idx_for_text = shelf0_indices_list[rep_idx_in_shelf0]
+                artwork_id = all_artwork_ids[artwork_idx_for_text]
+                artwork_row = df[df["id"].astype(float) == float(artwork_id)]
+                if artwork_row.empty:
+                    artwork_row = df[df["id"].astype(str).str.strip() == str(artwork_id).strip()]
+                if not artwork_row.empty:
+                    title = str(artwork_row.iloc[0].get("title", ""))
+                    if title and title != "nan":
+                        # Draw title text with larger font and background
+                        text_x = x + RULER_DOT_SIZE_SCALED + 10 * scale
+                        text_y = y - 15 * scale
+                        font_ruler_text = get_font(int(24 * scale), "medium")  # Larger font for ruler step
+                        # Draw background for text
+                        bbox = draw.textbbox((text_x, text_y), title, font=font_ruler_text)
+                        padding = int(6 * scale)
+                        bg_rect = [bbox[0] - padding, bbox[1] - padding, 
+                                  bbox[2] + padding, bbox[3] + padding]
+                        draw.rectangle(bg_rect, fill=colors["background"], outline=colors["lime"], width=2)
+                        draw.text((text_x, text_y), title, fill=colors["lime"], font=font_ruler_text)
+            except Exception:
+                pass
+        
+        if outlier_idx_in_shelf0 is not None and outlier_idx_in_shelf0 < len(shelf0_coords):
+            x, y = shelf0_coords[outlier_idx_in_shelf0]
+            try:
+                artwork_idx_for_text = shelf0_indices_list[outlier_idx_in_shelf0]
+                artwork_id = all_artwork_ids[artwork_idx_for_text]
+                artwork_row = df[df["id"].astype(float) == float(artwork_id)]
+                if artwork_row.empty:
+                    artwork_row = df[df["id"].astype(str).str.strip() == str(artwork_id).strip()]
+                if not artwork_row.empty:
+                    title = str(artwork_row.iloc[0].get("title", ""))
+                    if title and title != "nan":
+                        # Draw title text with larger font and background
+                        text_x = x + RULER_DOT_SIZE_SCALED + 10 * scale
+                        text_y = y - 15 * scale
+                        font_ruler_text = get_font(int(24 * scale), "medium")  # Larger font for ruler step
+                        # Draw background for text
+                        bbox = draw.textbbox((text_x, text_y), title, font=font_ruler_text)
+                        padding = int(6 * scale)
+                        bg_rect = [bbox[0] - padding, bbox[1] - padding, 
+                                  bbox[2] + padding, bbox[3] + padding]
+                        draw.rectangle(bg_rect, fill=colors["background"], outline=colors["lime"], width=2)
+                        draw.text((text_x, text_y), title, fill=colors["lime"], font=font_ruler_text)
+            except Exception:
+                pass
+    
     # Draw two selected works info on right side during ruler step - standardized layout
     if step == "ruler" and df is not None:
-        panel_x = MAP_WIDTH + 30
-        y_pos = 60  # Standardized start position
+        panel_x = MAP_WIDTH_SCALED + 30 * scale
+        y_pos = 60 * scale  # Standardized start position
         
         # Find representative and outlier artworks
         rep_artwork = None
@@ -1545,153 +1703,172 @@ def create_frame(
                         break
         
         # Representative section (top half of right side) - standardized layout
+        # Always show representative section if available (regardless of ruler_to_rep)
         if rep_artwork is not None:
-            font_side = get_font(FONT_SIZE_TABLE, "thin")
-            font_title_large = get_font(20, "medium")  # Standardized: 20pt Medium
+            font_side = get_font(int(FONT_SIZE_TABLE * scale), "thin")
+            font_title_large = get_font(int(20 * scale), "medium")  # Standardized: 20pt Medium
             
             # Start at 60px from top - standardized
-            y_pos = 60
+            y_pos_rep = 60 * scale
             
             # Draw thumbnail at the very top first - standardized size
             rep_image = load_image(rep_artwork.get("thumbnail", ""))
             if rep_image:
-                # Standardized fixed height, maintain aspect ratio
+                # Standardized fixed height, maintain aspect ratio (scale for supersampling)
                 img_w, img_h = rep_image.size
-                ratio = FIXED_IMAGE_HEIGHT / img_h
-                new_w, new_h = int(img_w * ratio), FIXED_IMAGE_HEIGHT
+                image_height_scaled = FIXED_IMAGE_HEIGHT * scale
+                ratio = image_height_scaled / img_h
+                new_w, new_h = int(img_w * ratio), int(image_height_scaled)
                 rep_image = rep_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
                 
                 # No border - paste image directly
-                img_x = MAP_WIDTH + (PANEL_WIDTH - rep_image.width) // 2
+                img_x = MAP_WIDTH_SCALED + (PANEL_WIDTH_SCALED - rep_image.width) // 2
                 # Paste image - need to use alpha composite if image has alpha, otherwise direct paste
                 if rep_image.mode == 'RGBA':
-                    img.paste(rep_image, (img_x, y_pos), rep_image)
+                    img.paste(rep_image, (img_x, y_pos_rep), rep_image)
                 else:
-                    img.paste(rep_image, (img_x, y_pos))
-                y_pos += rep_image.height + 20  # Standardized spacing
+                    img.paste(rep_image, (img_x, y_pos_rep))
+                y_pos_rep += rep_image.height + 20 * scale  # Standardized spacing
             else:
-                y_pos += 20
+                y_pos_rep += 20 * scale
             
             # Draw divider line after image - standardized spacing
-            draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], 
-                     fill=colors["text"], width=1)
-            y_pos += 20  # Standardized spacing
+            draw.line([(panel_x, y_pos_rep), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos_rep)], 
+                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+            y_pos_rep += 20 * scale  # Standardized spacing
             
             # Section label - standardized size
-            font_section_label = get_font(20, "medium")  # Standardized: 20pt Medium
-            draw.text((panel_x, y_pos), "Representative", fill=colors["lime"], font=font_section_label)
-            y_pos += 30  # Standardized spacing
+            font_section_label = get_font(int(20 * scale), "medium")  # Standardized: 20pt Medium
+            draw.text((panel_x, y_pos_rep), "Representative", fill=colors["lime"], font=font_section_label)
+            y_pos_rep += 30 * scale  # Standardized spacing
             
             # Title - standardized size
             title = str(rep_artwork.get("title", "Unknown"))
-            max_title_width = CANVAS_WIDTH - panel_x - 20
-            y_pos = draw_artwork_title(draw, title, panel_x, y_pos, max_title_width, colors, font_title_large)
+            max_title_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
+            y_pos_rep = draw_artwork_title(draw, title, panel_x, y_pos_rep, max_title_width, colors, font_title_large)
             
             # Artist and Year - standardized sizes
             artist = str(rep_artwork.get("artist", "Unknown"))
             year = str(rep_artwork.get("year", "N/A"))
-            max_artist_width = CANVAS_WIDTH - panel_x - 20
+            max_artist_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
             # Draw artist with standardized font
-            font_artist = get_font(16, "medium")  # Standardized: 16pt Medium
+            font_artist = get_font(int(16 * scale), "medium")  # Standardized: 16pt Medium
             artist_bbox = draw.textbbox((0, 0), artist, font=font_artist)
             if artist_bbox[2] - artist_bbox[0] > max_artist_width:
                 while artist and draw.textbbox((0, 0), artist + "...", font=font_artist)[2] > max_artist_width:
                     artist = artist[:-1]
                 artist = artist + "..." if artist else "..."
-            draw.text((panel_x, y_pos), artist, fill=colors["text"], font=font_artist)
-            y_pos += 22  # Standardized spacing
+            draw.text((panel_x, y_pos_rep), artist, fill=colors["text"], font=font_artist)
+            y_pos_rep += 22 * scale  # Standardized spacing
             # Year with standardized font
-            draw.text((panel_x, y_pos), year, fill=colors["text"], font=font_side)
-            y_pos += 25  # Standardized spacing
+            draw.text((panel_x, y_pos_rep), year, fill=colors["text"], font=font_side)
+            y_pos_rep += 25 * scale  # Standardized spacing
             
             # Divider before details - standardized layout
-            draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], 
-                     fill=colors["text"], width=1)
-            y_pos += 20  # Standardized spacing
+            draw.line([(panel_x, y_pos_rep), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos_rep)], 
+                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+            y_pos_rep += 20 * scale  # Standardized spacing
             
             # Two column layout for remaining fields (distance will be included here)
-            max_width = CANVAS_WIDTH - panel_x - 20
-            y_pos = draw_two_column_fields(
-                draw, rep_artwork, panel_x, y_pos, max_width,
+            max_width = CANVAS_WIDTH_SCALED - panel_x - 20
+            y_pos_rep = draw_two_column_fields(
+                draw, rep_artwork, panel_x, y_pos_rep, max_width,
                 colors, font_small, font_side,
+                scale=scale,
                 all_embeddings=all_embeddings,
                 artwork_idx=rep_idx,
                 distances=distances,  # Show distance in two-column section
                 shelf0_mask=shelf0_mask
             )
         
-        # Divider between sections - standardized spacing
-        y_pos += 20  # Standardized spacing
-        draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], fill=colors["text"], width=1)
-        y_pos += 20  # Standardized spacing (was 30, now consistent)
+        # Calculate divider position - split panel in half if both sections exist
+        if rep_artwork is not None and outlier_artwork is not None:
+            # Split panel vertically - representative gets top half, outlier gets bottom half
+            divider_y = CANVAS_HEIGHT_SCALED // 2
+            draw.line([(panel_x, divider_y), (CANVAS_WIDTH_SCALED - 30 * scale, divider_y)], fill=colors["text"], width=LINE_WIDTH_SCALED)
+            y_pos_outlier = divider_y + 20 * scale  # Start outlier section below divider
+        elif rep_artwork is not None:
+            # Only representative - use normal spacing
+            y_pos_outlier = y_pos_rep + 20 * scale
+            draw.line([(panel_x, y_pos_outlier), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos_outlier)], fill=colors["text"], width=LINE_WIDTH_SCALED)
+            y_pos_outlier += 20 * scale
+        else:
+            # Only outlier or neither - start at top
+            y_pos_outlier = 60 * scale
         
         # Outlier section (bottom half of right side) - standardized layout
+        # Always show outlier section if available
         if outlier_artwork is not None:
-            font_side = get_font(FONT_SIZE_TABLE, "thin")
-            font_title_large = get_font(20, "medium")  # Standardized: 20pt Medium
+            font_side = get_font(int(FONT_SIZE_TABLE * scale), "thin")
+            font_title_large = get_font(int(20 * scale), "medium")  # Standardized: 20pt Medium
+            
+            # Use calculated y_pos_outlier from above
+            y_pos = y_pos_outlier
             
             # Draw thumbnail at the very top first - standardized size
             outlier_image = load_image(outlier_artwork.get("thumbnail", ""))
             if outlier_image:
-                # Standardized fixed height, maintain aspect ratio
+                # Standardized fixed height, maintain aspect ratio (scale for supersampling)
                 img_w, img_h = outlier_image.size
-                ratio = FIXED_IMAGE_HEIGHT / img_h
-                new_w, new_h = int(img_w * ratio), FIXED_IMAGE_HEIGHT
+                image_height_scaled = FIXED_IMAGE_HEIGHT * scale
+                ratio = image_height_scaled / img_h
+                new_w, new_h = int(img_w * ratio), int(image_height_scaled)
                 outlier_image = outlier_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
                 
                 # No border - paste image directly
-                img_x = MAP_WIDTH + (PANEL_WIDTH - outlier_image.width) // 2
+                img_x = MAP_WIDTH_SCALED + (PANEL_WIDTH_SCALED - outlier_image.width) // 2
                 # Paste image - need to use alpha composite if image has alpha, otherwise direct paste
                 if outlier_image.mode == 'RGBA':
                     img.paste(outlier_image, (img_x, y_pos), outlier_image)
                 else:
                     img.paste(outlier_image, (img_x, y_pos))
-                y_pos += outlier_image.height + 20  # Standardized spacing
+                y_pos += outlier_image.height + 20 * scale  # Standardized spacing
             else:
-                y_pos += 20
+                y_pos += 20 * scale
             
             # Draw divider line after image - standardized spacing
-            draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], 
-                     fill=colors["text"], width=1)
-            y_pos += 20  # Standardized spacing
+            draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
+                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+            y_pos += 20 * scale  # Standardized spacing
             
             # Section label - standardized size
-            font_section_label = get_font(20, "medium")  # Standardized: 20pt Medium
+            font_section_label = get_font(int(20 * scale), "medium")  # Standardized: 20pt Medium
             draw.text((panel_x, y_pos), "Outlier", fill=colors["lime"], font=font_section_label)
-            y_pos += 30  # Standardized spacing
+            y_pos += 30 * scale  # Standardized spacing
             
             # Title - standardized size
             title = str(outlier_artwork.get("title", "Unknown"))
-            max_title_width = CANVAS_WIDTH - panel_x - 20
-            y_pos = draw_artwork_title(draw, title, panel_x, y_pos, max_title_width, colors, font_title_large)
+            max_title_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
+            y_pos = draw_artwork_title(draw, title, panel_x, y_pos, max_title_width, colors, font_title_large, scale)
             
             # Artist and Year - standardized sizes
             artist = str(outlier_artwork.get("artist", "Unknown"))
             year = str(outlier_artwork.get("year", "N/A"))
-            max_artist_width = CANVAS_WIDTH - panel_x - 20
+            max_artist_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
             # Draw artist with standardized font
-            font_artist = get_font(16, "medium")  # Standardized: 16pt Medium
+            font_artist = get_font(int(16 * scale), "medium")  # Standardized: 16pt Medium
             artist_bbox = draw.textbbox((0, 0), artist, font=font_artist)
             if artist_bbox[2] - artist_bbox[0] > max_artist_width:
                 while artist and draw.textbbox((0, 0), artist + "...", font=font_artist)[2] > max_artist_width:
                     artist = artist[:-1]
                 artist = artist + "..." if artist else "..."
             draw.text((panel_x, y_pos), artist, fill=colors["text"], font=font_artist)
-            y_pos += 22  # Standardized spacing
+            y_pos += 22 * scale  # Standardized spacing
             # Year with standardized font
             draw.text((panel_x, y_pos), year, fill=colors["text"], font=font_side)
-            y_pos += 25  # Standardized spacing
+            y_pos += 25 * scale  # Standardized spacing
             
             # Divider before details - standardized layout
-            draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], 
-                     fill=colors["text"], width=1)
-            y_pos += 20  # Standardized spacing
+            draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], 
+                     fill=colors["text"], width=LINE_WIDTH_SCALED)
+            y_pos += 20 * scale  # Standardized spacing
             
             # Two column layout for remaining fields (distance will be included here)
-            max_width = CANVAS_WIDTH - panel_x - 20
+            max_width = CANVAS_WIDTH_SCALED - panel_x - 20 * scale
             y_pos = draw_two_column_fields(
                 draw, outlier_artwork, panel_x, y_pos, max_width,
                 colors, font_small, font_side,
+                scale=scale,
                 all_embeddings=all_embeddings,
                 artwork_idx=outlier_idx,
                 distances=distances,  # Show distance in two-column section
@@ -1716,8 +1893,8 @@ def create_frame(
     
     # Draw table on right side for representatives step - standardized layout
     if step == "representatives" and top_representatives is not None and df is not None:
-        panel_x = MAP_WIDTH + 30
-        y_pos = 60  # Standardized start position
+        panel_x = MAP_WIDTH_SCALED + 30 * scale
+        y_pos = 60 * scale  # Standardized start position
         
         # Title - determine based on average distance
         if top_representatives is not None and len(top_representatives) > 0:
@@ -1726,18 +1903,18 @@ def create_frame(
         else:
             table_title = "Top 10 Representatives"
         draw.text((panel_x, y_pos), table_title, fill=colors["text"], font=font_title)
-        y_pos += 60
+        y_pos += int(60 * scale)
         
         # Draw table header
         draw.text((panel_x, y_pos), "Rank", fill=colors["text"], font=font_label)
-        draw.text((panel_x + 60, y_pos), "Title", fill=colors["text"], font=font_label)
-        draw.text((panel_x + 300, y_pos), "Artist", fill=colors["text"], font=font_label)
-        draw.text((panel_x + 500, y_pos), "Distance", fill=colors["text"], font=font_label)
-        y_pos += 40
+        draw.text((panel_x + int(60 * scale), y_pos), "Title", fill=colors["text"], font=font_label)
+        draw.text((panel_x + int(300 * scale), y_pos), "Artist", fill=colors["text"], font=font_label)
+        draw.text((panel_x + int(500 * scale), y_pos), "Distance", fill=colors["text"], font=font_label)
+        y_pos += int(40 * scale)
         
         # Draw divider
-        draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], fill=colors["text"], width=1)
-        y_pos += 20
+        draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], fill=colors["text"], width=LINE_WIDTH_SCALED)
+        y_pos += int(20 * scale)
         
         # Draw table rows
         for rank, (artwork_idx_in_all, distance) in enumerate(top_representatives[:10]):
@@ -1770,23 +1947,23 @@ def create_frame(
                     
                     # Title (truncate if too long)
                     title = str(artwork.get("title", "Unknown"))[:30]
-                    draw.text((panel_x + 60, y_pos), title, fill=row_color, font=font_small)
+                    draw.text((panel_x + int(60 * scale), y_pos), title, fill=row_color, font=font_small)
                     
                     # Artist (truncate if too long)
                     artist = str(artwork.get("artist", "Unknown"))[:20]
-                    draw.text((panel_x + 300, y_pos), artist, fill=row_color, font=font_small)
+                    draw.text((panel_x + int(300 * scale), y_pos), artist, fill=row_color, font=font_small)
                     
                     # Distance
-                    draw.text((panel_x + 500, y_pos), f"{distance:.4f}", fill=row_color, font=font_small)
+                    draw.text((panel_x + int(500 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_small)
                     
                     # Small thumbnail
                     thumbnail = load_image(artwork.get("thumbnail", ""))
                     if thumbnail:
-                        thumb_size = 30
+                        thumb_size = int(30 * scale)
                         thumbnail_resized = thumbnail.resize((thumb_size, thumb_size), Image.Resampling.LANCZOS)
-                        img.paste(thumbnail_resized, (panel_x + 420, y_pos - 5))
+                        img.paste(thumbnail_resized, (panel_x + int(420 * scale), int(y_pos - 5 * scale)))
                     
-                    y_pos += 50
+                    y_pos += int(50 * scale)
             except Exception:
                 pass
     
@@ -1819,25 +1996,25 @@ def create_frame(
                 for j in range(i + 1, len(all_top10_items)):
                     x1, y1 = all_top10_items[i]
                     x2, y2 = all_top10_items[j]
-                    draw.line([(x1, y1), (x2, y2)], fill=colors["lime"], width=1)
+                    draw.line([(x1, y1), (x2, y2)], fill=colors["lime"], width=LINE_WIDTH_SCALED)
     
     # Draw top 10 table (5 representatives + 5 outliers) on right side
     if step == "top10" and top_representatives is not None and top_outliers is not None and df is not None:
-        panel_x = MAP_WIDTH + 30
-        y_pos = 60  # Higher up
+        panel_x = MAP_WIDTH_SCALED + 30 * scale
+        y_pos = 60 * scale  # Higher up
         
         # Title - larger, more prominent with medium weight
-        font_section_title = get_font(32, "medium")  # Larger, medium weight for prominence
+        font_section_title = get_font(int(32 * scale), "medium")  # Larger, medium weight for prominence
         draw.text((panel_x, y_pos), "Representatives", fill=colors["lime"], font=font_section_title)
-        y_pos += 50  # Less spacing
+        y_pos += int(50 * scale)  # Less spacing
         
         # Representatives section header
-        font_table = get_font(FONT_SIZE_TABLE, "thin")
-        draw.text((panel_x + 80, y_pos), "Rank", fill=colors["text"], font=font_table)
-        draw.text((panel_x + 140, y_pos), "Title", fill=colors["text"], font=font_table)
-        draw.text((panel_x + 350, y_pos), "Artist", fill=colors["text"], font=font_table)
-        draw.text((panel_x + 520, y_pos), "Distance", fill=colors["text"], font=font_table)
-        y_pos += 40
+        font_table = get_font(int(FONT_SIZE_TABLE * scale), "thin")
+        draw.text((panel_x + int(80 * scale), y_pos), "Rank", fill=colors["text"], font=font_table)
+        draw.text((panel_x + int(140 * scale), y_pos), "Title", fill=colors["text"], font=font_table)
+        draw.text((panel_x + int(350 * scale), y_pos), "Artist", fill=colors["text"], font=font_table)
+        draw.text((panel_x + int(520 * scale), y_pos), "Distance", fill=colors["text"], font=font_table)
+        y_pos += int(40 * scale)
         
         # Draw representatives rows (progressive with easing)
         num_reps_to_show = top10_reps_shown if top10_reps_shown is not None else len(top_representatives[:5])
@@ -1857,67 +2034,53 @@ def create_frame(
                                   (float(artwork_id) == float(aesthetic_representative_id) or 
                                    str(artwork_id) == str(aesthetic_representative_id)))
                     
-                    # Apply easing for the currently appearing item
-                    # Only apply easing if we're currently showing representatives (not outliers)
-                    is_currently_appearing = (rank == num_reps_to_show - 1 and 
-                                            (top10_outliers_shown is None or top10_outliers_shown == 0))
-                    if is_currently_appearing and top10_item_ease_progress is not None:
-                        # Ease in opacity: interpolate from text color to green (not from black)
-                        eased = top10_item_ease_progress * top10_item_ease_progress * (3 - 2 * top10_item_ease_progress)
-                        base_color = colors["text"]  # Start from text color
-                        target_color = colors["lime"]  # End at lime green
-                        # Interpolate from text color to lime green
-                        r = int(base_color[0] + (target_color[0] - base_color[0]) * eased)
-                        g = int(base_color[1] + (target_color[1] - base_color[1]) * eased)
-                        b = int(base_color[2] + (target_color[2] - base_color[2]) * eased)
-                        row_color = (r, g, b)
+                    # Only highlight selected items in green (not currently appearing items)
+                    # Currently appearing items should stay in normal text color
+                    if is_selected:
+                        row_color = colors["lime"]
                     else:
-                        # Highlight currently appearing item in green, or selected item
-                        if is_currently_appearing or is_selected:
-                            row_color = colors["lime"]
-                        else:
-                            row_color = colors["text"]
+                        row_color = colors["text"]
                     
                     # Draw thumbnail on the left (bigger size)
                     thumbnail = load_image(artwork.get("thumbnail", ""))
                     if thumbnail:
-                        thumb_size = 60  # Bigger thumbnail size
+                        thumb_size = int(60 * scale)  # Bigger thumbnail size
                         thumbnail_resized = thumbnail.resize((thumb_size, thumb_size), Image.Resampling.LANCZOS)
                         # Position thumbnail before rank number
                         thumb_x = panel_x
-                        thumb_y = y_pos - 5
+                        thumb_y = int(y_pos - 5 * scale)
                         # Handle transparent images
                         if thumbnail_resized.mode == "RGBA":
                             img.paste(thumbnail_resized, (thumb_x, thumb_y), thumbnail_resized)
                         else:
                             img.paste(thumbnail_resized, (thumb_x, thumb_y))
                     
-                    draw.text((panel_x + 80, y_pos), f"{rank + 1}", fill=row_color, font=font_table)
+                    draw.text((panel_x + int(80 * scale), y_pos), f"{rank + 1}", fill=row_color, font=font_table)
                     title = str(artwork.get("title", "Unknown"))[:30]
-                    draw.text((panel_x + 140, y_pos), title, fill=row_color, font=font_table)
+                    draw.text((panel_x + int(140 * scale), y_pos), title, fill=row_color, font=font_table)
                     artist = str(artwork.get("artist", "Unknown"))[:25]
-                    draw.text((panel_x + 350, y_pos), artist, fill=row_color, font=font_table)
-                    draw.text((panel_x + 520, y_pos), f"{distance:.4f}", fill=row_color, font=font_table)
-                    y_pos += 70
+                    draw.text((panel_x + int(350 * scale), y_pos), artist, fill=row_color, font=font_table)
+                    draw.text((panel_x + int(520 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_table)
+                    y_pos += int(70 * scale)
             except Exception:
                 pass
         
-        y_pos += 20
-        draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], fill=colors["text"], width=1)
-        y_pos += 30
+        y_pos += int(20 * scale)
+        draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30 * scale, y_pos)], fill=colors["text"], width=LINE_WIDTH_SCALED)
+        y_pos += int(30 * scale)
         
         # Outliers section title - larger, more prominent with medium weight
-        font_section_title = get_font(32, "medium")  # Larger, medium weight for prominence
+        font_section_title = get_font(int(32 * scale), "medium")  # Larger, medium weight for prominence
         draw.text((panel_x, y_pos), "Outliers", fill=colors["lime"], font=font_section_title)
-        y_pos += 50  # Less spacing
+        y_pos += int(50 * scale)  # Less spacing
         
         # Outliers section header
-        font_table = get_font(FONT_SIZE_TABLE, "thin")
-        draw.text((panel_x + 80, y_pos), "Rank", fill=colors["text"], font=font_table)
-        draw.text((panel_x + 140, y_pos), "Title", fill=colors["text"], font=font_table)
-        draw.text((panel_x + 350, y_pos), "Artist", fill=colors["text"], font=font_table)
-        draw.text((panel_x + 520, y_pos), "Distance", fill=colors["text"], font=font_table)
-        y_pos += 40
+        font_table = get_font(int(FONT_SIZE_TABLE * scale), "thin")
+        draw.text((panel_x + int(80 * scale), y_pos), "Rank", fill=colors["text"], font=font_table)
+        draw.text((panel_x + int(140 * scale), y_pos), "Title", fill=colors["text"], font=font_table)
+        draw.text((panel_x + int(350 * scale), y_pos), "Artist", fill=colors["text"], font=font_table)
+        draw.text((panel_x + int(520 * scale), y_pos), "Distance", fill=colors["text"], font=font_table)
+        y_pos += int(40 * scale)
         
         # Draw outliers rows (progressive with easing)
         num_outliers_to_show = top10_outliers_shown if top10_outliers_shown is not None else len(top_outliers[:5])
@@ -1937,53 +2100,41 @@ def create_frame(
                                   (float(artwork_id) == float(aesthetic_outlier_id) or 
                                    str(artwork_id) == str(aesthetic_outlier_id)))
                     
-                    # Apply easing for the currently appearing item (last outlier being shown)
-                    is_currently_appearing = (rank == num_outliers_to_show - 1)
-                    if is_currently_appearing and top10_item_ease_progress is not None:
-                        # Ease in opacity: interpolate from text color to green (not from black)
-                        eased = top10_item_ease_progress * top10_item_ease_progress * (3 - 2 * top10_item_ease_progress)
-                        base_color = colors["text"]  # Start from text color
-                        target_color = colors["lime"]  # End at lime green
-                        # Interpolate from text color to lime green
-                        r = int(base_color[0] + (target_color[0] - base_color[0]) * eased)
-                        g = int(base_color[1] + (target_color[1] - base_color[1]) * eased)
-                        b = int(base_color[2] + (target_color[2] - base_color[2]) * eased)
-                        row_color = (r, g, b)
+                    # Only highlight selected items in green (not currently appearing items)
+                    # Currently appearing items should stay in normal text color
+                    if is_selected:
+                        row_color = colors["lime"]
                     else:
-                        # Highlight currently appearing item in green, or selected item
-                        if is_currently_appearing or is_selected:
-                            row_color = colors["lime"]
-                        else:
-                            row_color = colors["text"]
+                        row_color = colors["text"]
                     
                     # Draw thumbnail on the left (bigger size)
                     thumbnail = load_image(artwork.get("thumbnail", ""))
                     if thumbnail:
-                        thumb_size = 60  # Bigger thumbnail size
+                        thumb_size = int(60 * scale)  # Bigger thumbnail size
                         thumbnail_resized = thumbnail.resize((thumb_size, thumb_size), Image.Resampling.LANCZOS)
                         # Position thumbnail before rank number
                         thumb_x = panel_x
-                        thumb_y = y_pos - 5
+                        thumb_y = int(y_pos - 5 * scale)
                         # Handle transparent images
                         if thumbnail_resized.mode == "RGBA":
                             img.paste(thumbnail_resized, (thumb_x, thumb_y), thumbnail_resized)
                         else:
                             img.paste(thumbnail_resized, (thumb_x, thumb_y))
                     
-                    draw.text((panel_x + 80, y_pos), f"{rank + 1}", fill=row_color, font=font_table)
+                    draw.text((panel_x + int(80 * scale), y_pos), f"{rank + 1}", fill=row_color, font=font_table)
                     title = str(artwork.get("title", "Unknown"))[:30]
-                    draw.text((panel_x + 140, y_pos), title, fill=row_color, font=font_table)
+                    draw.text((panel_x + int(140 * scale), y_pos), title, fill=row_color, font=font_table)
                     artist = str(artwork.get("artist", "Unknown"))[:25]
-                    draw.text((panel_x + 350, y_pos), artist, fill=row_color, font=font_table)
-                    draw.text((panel_x + 520, y_pos), f"{distance:.4f}", fill=row_color, font=font_table)
-                    y_pos += 70
+                    draw.text((panel_x + int(350 * scale), y_pos), artist, fill=row_color, font=font_table)
+                    draw.text((panel_x + int(520 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_table)
+                    y_pos += int(70 * scale)
             except Exception:
                 pass
     
         # Draw side-by-side view of selected items on left screen, rank table on right - standardized layout
         if step == "side_by_side" and df is not None:
             # Clear left screen area (map area)
-            draw.rectangle([0, 0, MAP_WIDTH, MAP_HEIGHT], fill=colors["background"])
+            draw.rectangle([0, 0, MAP_WIDTH_SCALED, MAP_HEIGHT_SCALED], fill=colors["background"])
             
             # Find representative and outlier artworks
             rep_artwork = None
@@ -2034,10 +2185,10 @@ def create_frame(
                             break
             
             # Draw both items on left side, stacked vertically, each with horizontal layout (image left, info right)
-            left_x = 50
-            y_start = 100
-            item_width = MAP_WIDTH - 100  # Use most of left side width
-            item_height = (MAP_HEIGHT - 150) // 2  # Split height for two items
+            left_x = 50 * scale
+            y_start = 100 * scale
+            item_width = MAP_WIDTH_SCALED - 100 * scale  # Use most of left side width
+            item_height = (MAP_HEIGHT_SCALED - 150 * scale) // 2  # Split height for two items
             
             # Representative (top half of left side) - horizontal layout
             if rep_artwork is not None:
@@ -2069,8 +2220,8 @@ def create_frame(
                 title = str(rep_artwork.get("title", "Unknown"))
                 draw.text((info_x, info_y), "Representative", fill=colors["lime"], font=font_label)
                 info_y += 35
-                # Wrap title if needed - constrain to MAP_WIDTH
-                max_title_width = MAP_WIDTH - info_x - 20
+                # Wrap title if needed - constrain to MAP_WIDTH_SCALED
+                max_title_width = MAP_WIDTH_SCALED - info_x - 20
                 title_words = title.split()
                 title_lines = []
                 current_line = ""
@@ -2087,7 +2238,7 @@ def create_frame(
                     title_lines.append(current_line)
                 
                 # Use smaller font for side-by-side view
-                font_side = get_font(FONT_SIZE_TABLE, "thin")
+                font_side = get_font(int(FONT_SIZE_TABLE * scale), "thin")
                 for line in title_lines[:2]:  # Max 2 lines
                     draw.text((info_x, info_y), line, fill=colors["text"], font=font_side)
                     info_y += 25
@@ -2097,7 +2248,7 @@ def create_frame(
                 artist = str(rep_artwork.get("artist", "Unknown"))
                 draw.text((info_x, info_y), "Artist", fill=colors["text"], font=font_small)
                 info_y += 18
-                max_artist_width = MAP_WIDTH - info_x - 20
+                max_artist_width = MAP_WIDTH_SCALED - info_x - 20
                 artist_bbox = draw.textbbox((0, 0), artist, font=font_side)
                 if artist_bbox[2] - artist_bbox[0] > max_artist_width:
                     # Truncate artist name
@@ -2119,7 +2270,7 @@ def create_frame(
                 if size and size != "N/A" and size != "nan":
                     draw.text((info_x, info_y), "Size", fill=colors["text"], font=font_small)
                     info_y += 18
-                    max_size_width = MAP_WIDTH - info_x - 20
+                    max_size_width = MAP_WIDTH_SCALED - info_x - 20
                     size_bbox = draw.textbbox((0, 0), size, font=font_side)
                     if size_bbox[2] - size_bbox[0] > max_size_width:
                         # Truncate size
@@ -2144,11 +2295,11 @@ def create_frame(
                 # Description (wrapped text)
                 description = str(rep_artwork.get("description", ""))
                 if description and description != "nan" and description.strip():
-                    draw.line([(info_x, info_y), (MAP_WIDTH - 50, info_y)], fill=colors["text"], width=1)
+                    draw.line([(info_x, info_y), (MAP_WIDTH_SCALED - 50, info_y)], fill=colors["text"], width=1)
                     info_y += 15
                     draw.text((info_x, info_y), "Description", fill=colors["text"], font=font_small)
                     info_y += 18
-                    max_width = MAP_WIDTH - info_x - 20
+                    max_width = MAP_WIDTH_SCALED - info_x - 20
                     words = description.split()
                     lines = []
                     current_line = ""
@@ -2170,9 +2321,9 @@ def create_frame(
             
             # Draw divider between representative and outlier on left (aligned to exact center)
             # Calculate exact center of left side area
-            divider_y = MAP_HEIGHT // 2  # Exact center of canvas height
+            divider_y = MAP_HEIGHT_SCALED // 2  # Exact center of canvas height
             divider_start_x = left_x
-            divider_end_x = MAP_WIDTH - 50
+            divider_end_x = MAP_WIDTH_SCALED - 50 * scale
             draw.line([(divider_start_x, divider_y), (divider_end_x, divider_y)], fill=colors["text"], width=1)
             
             # Outlier (bottom half of left side) - horizontal layout
@@ -2205,8 +2356,8 @@ def create_frame(
                 title = str(outlier_artwork.get("title", "Unknown"))
                 draw.text((info_x, info_y), "Outlier", fill=colors["lime"], font=font_label)
                 info_y += 35
-                # Wrap title if needed - constrain to MAP_WIDTH
-                max_title_width = MAP_WIDTH - info_x - 20
+                # Wrap title if needed - constrain to MAP_WIDTH_SCALED
+                max_title_width = MAP_WIDTH_SCALED - info_x - 20
                 title_words = title.split()
                 title_lines = []
                 current_line = ""
@@ -2223,7 +2374,7 @@ def create_frame(
                     title_lines.append(current_line)
                 
                 # Use smaller font for side-by-side view
-                font_side = get_font(FONT_SIZE_TABLE, "thin")
+                font_side = get_font(int(FONT_SIZE_TABLE * scale), "thin")
                 for line in title_lines[:2]:  # Max 2 lines
                     draw.text((info_x, info_y), line, fill=colors["text"], font=font_side)
                     info_y += 25
@@ -2233,7 +2384,7 @@ def create_frame(
                 artist = str(outlier_artwork.get("artist", "Unknown"))
                 draw.text((info_x, info_y), "Artist", fill=colors["text"], font=font_small)
                 info_y += 18
-                max_artist_width = MAP_WIDTH - info_x - 20
+                max_artist_width = MAP_WIDTH_SCALED - info_x - 20
                 artist_bbox = draw.textbbox((0, 0), artist, font=font_side)
                 if artist_bbox[2] - artist_bbox[0] > max_artist_width:
                     # Truncate artist name
@@ -2255,7 +2406,7 @@ def create_frame(
                 if size and size != "N/A" and size != "nan":
                     draw.text((info_x, info_y), "Size", fill=colors["text"], font=font_small)
                     info_y += 18
-                    max_size_width = MAP_WIDTH - info_x - 20
+                    max_size_width = MAP_WIDTH_SCALED - info_x - 20
                     size_bbox = draw.textbbox((0, 0), size, font=font_side)
                     if size_bbox[2] - size_bbox[0] > max_size_width:
                         # Truncate size
@@ -2280,11 +2431,11 @@ def create_frame(
                 # Description (wrapped text)
                 description = str(outlier_artwork.get("description", ""))
                 if description and description != "nan" and description.strip():
-                    draw.line([(info_x, info_y), (MAP_WIDTH - 50, info_y)], fill=colors["text"], width=1)
+                    draw.line([(info_x, info_y), (MAP_WIDTH_SCALED - 50, info_y)], fill=colors["text"], width=1)
                     info_y += 15
                     draw.text((info_x, info_y), "Description", fill=colors["text"], font=font_small)
                     info_y += 18
-                    max_width = MAP_WIDTH - info_x - 20
+                    max_width = MAP_WIDTH_SCALED - info_x - 20
                     words = description.split()
                     lines = []
                     current_line = ""
@@ -2305,18 +2456,18 @@ def create_frame(
                         info_y += 16
             
             # Draw rank table on right side (match top10 structure with thumbnails)
-            panel_x = MAP_WIDTH + 30
+            panel_x = MAP_WIDTH_SCALED + 30
             y_pos = 100
             
             # Representatives section
             draw.text((panel_x, y_pos), "Representatives", fill=colors["text"], font=font_title)
-            y_pos += 80  # Match top10 spacing
-            font_table = get_font(FONT_SIZE_TABLE, "thin")
+            y_pos += int(80 * scale)  # Match top10 spacing
+            font_table = get_font(int(FONT_SIZE_TABLE * scale), "thin")
             draw.text((panel_x + 80, y_pos), "Rank", fill=colors["text"], font=font_table)
             draw.text((panel_x + 140, y_pos), "Title", fill=colors["text"], font=font_table)
             draw.text((panel_x + 350, y_pos), "Artist", fill=colors["text"], font=font_table)
             draw.text((panel_x + 520, y_pos), "Distance", fill=colors["text"], font=font_table)
-            y_pos += 40
+            y_pos += int(40 * scale)
             
             # Draw representatives rows
             if top_representatives is not None:
@@ -2354,23 +2505,23 @@ def create_frame(
                             artist = str(artwork.get("artist", "Unknown"))[:25]
                             draw.text((panel_x + 350, y_pos), artist, fill=row_color, font=font_table)
                             draw.text((panel_x + 520, y_pos), f"{distance:.4f}", fill=row_color, font=font_table)
-                            y_pos += 70
+                            y_pos += int(70 * scale)
                     except Exception:
                         pass
             
             y_pos += 20
-            draw.line([(panel_x, y_pos), (CANVAS_WIDTH - 30, y_pos)], fill=colors["text"], width=1)
+            draw.line([(panel_x, y_pos), (CANVAS_WIDTH_SCALED - 30, y_pos)], fill=colors["text"], width=1)
             y_pos += 30
             
             # Outliers section
             draw.text((panel_x, y_pos), "Outliers", fill=colors["text"], font=font_title)
-            y_pos += 80  # Match top10 spacing
-            font_table = get_font(FONT_SIZE_TABLE, "thin")
+            y_pos += int(80 * scale)  # Match top10 spacing
+            font_table = get_font(int(FONT_SIZE_TABLE * scale), "thin")
             draw.text((panel_x + 80, y_pos), "Rank", fill=colors["text"], font=font_table)
             draw.text((panel_x + 140, y_pos), "Title", fill=colors["text"], font=font_table)
             draw.text((panel_x + 350, y_pos), "Artist", fill=colors["text"], font=font_table)
             draw.text((panel_x + 520, y_pos), "Distance", fill=colors["text"], font=font_table)
-            y_pos += 40
+            y_pos += int(40 * scale)
             
             # Draw outliers rows
             if top_outliers is not None:
@@ -2408,17 +2559,18 @@ def create_frame(
                             artist = str(artwork.get("artist", "Unknown"))[:25]
                             draw.text((panel_x + 350, y_pos), artist, fill=row_color, font=font_table)
                             draw.text((panel_x + 520, y_pos), f"{distance:.4f}", fill=row_color, font=font_table)
-                            y_pos += 70
+                            y_pos += int(70 * scale)
                     except Exception:
                         pass
     
-    # Apply anti-aliasing filter for smoother edges
-    img = img.filter(ImageFilter.SMOOTH_MORE)
+    # Downscale from supersampled resolution to final resolution for smooth anti-aliasing
+    # Use LANCZOS resampling for highest quality downscaling
+    img = img.resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS)
     
     return img
 
 
-def main(target_shelf: str = "0", mode: str = "both", white_background: bool = False):
+def main(target_shelf: str = "0", mode: str = "both", white_background: bool = False, supersample_factor: float = 2.0):
     """Main function to generate visualization frames and video.
     
     Args:
@@ -2714,7 +2866,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         print(f"   Regal {target_shelf} coords range: x=[{shelf0_coords_2d[:, 0].min():.2f}, {shelf0_coords_2d[:, 0].max():.2f}], y=[{shelf0_coords_2d[:, 1].min():.2f}, {shelf0_coords_2d[:, 1].max():.2f}]")
     else:
         print(f"   Warning: No Regal {target_shelf} coordinates found!")
-        centroid_coord_2d = np.array([MAP_WIDTH // 2, MAP_HEIGHT // 2])  # Default to center
+        centroid_coord_2d = np.array([MAP_WIDTH_SCALED // 2, MAP_HEIGHT_SCALED // 2])  # Default to center
     
     print(f"   Representative artwork ID: {first_artwork_id}")
     if first_idx_in_shelf0 is not None:
@@ -2733,8 +2885,9 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         img = create_frame("all", all_coords_2d, all_artwork_ids, shelf0_mask, all_embeddings, 
                           target_shelf=target_shelf, top_representatives=top_items,
                           aesthetic_representative_id=aesthetic_representative_id,
-                          white_background=white_background)
-        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+                          white_background=white_background, supersample_factor=supersample_factor)
+        # Save with high quality PNG settings
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
     
     # Step 2: Show Regal items one by one slowly (NO LINES, just identification) with color easing
@@ -2746,7 +2899,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     # IMPORTANT: Only show ONE item at a time - each item should appear individually
     FRAMES_PER_ARTWORK_SLOW = 30  # More frames per artwork for slower pace
     EASE_IN_FRAMES = 15  # Frames for color easing animation
-    for artwork_num in range(1, num_shelf0 + 1):
+    for artwork_num in tqdm(range(1, num_shelf0 + 1), desc="Step 2: Identifying items"):
         # Get the artwork index being added
         current_artwork_idx_in_all = shelf0_indices_list[artwork_num - 1]
         
@@ -2765,6 +2918,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                 circle_expand = (i + 1) / CIRCLE_EXPAND_FRAMES
             
             img = create_frame("highlight_slow", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background, 
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d, 
@@ -2777,14 +2931,16 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               aesthetic_representative_id=aesthetic_representative_id,
                               color_ease_progress=color_ease,
                               circle_expand_progress=circle_expand)
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
     
     # Hold final state for a bit - show all Regal items
     if num_shelf0 > 0:
         last_artwork_idx = shelf0_indices_list[-1]
-        for i in range(FRAMES_PER_STEP // 2):
+        for i in tqdm(range(FRAMES_PER_STEP // 2), desc="Step 2: Hold final"):
             img = create_frame("highlight_slow", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background, 
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d, 
@@ -2795,7 +2951,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               target_shelf=target_shelf,
                               top_representatives=top_items,
                               aesthetic_representative_id=aesthetic_representative_id)
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
     
     # Step 3: Highlight Regal with centroid and distances (combined step) with easing
@@ -2805,7 +2962,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     # We show all items (num_shelf0_shown=num_shelf0) but animate lines/centroid progressively
     # Animate adding each artwork one by one with lines, centroid, and distances
     EASE_IN_FRAMES_STEP3 = 10  # Frames for easing in each item
-    for artwork_num in range(1, num_shelf0 + 1):
+    for artwork_num in tqdm(range(1, num_shelf0 + 1), desc="Step 3: Adding centroid"):
         # Get the artwork index being added
         current_artwork_idx_in_all = shelf0_indices_list[artwork_num - 1]
         
@@ -2838,6 +2995,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             # but lines are still drawn progressively based on num_shelf0_shown
             # IMPORTANT: Pass num_shelf0_shown=num_shelf0 to ensure all green dots are visible (from step 2)
             img = create_frame("highlight", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background, 
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d, 
@@ -2852,15 +3010,17 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               aesthetic_representative_id=aesthetic_representative_id,
                               color_ease_progress=None,  # No color easing - all items already green
                               circle_expand_progress=circle_expand)
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
     
     # Hold final state for a bit - show all items with final centroid and distances
     # Increase hold frames for centroid highlighting (more still frames)
     if num_shelf0 > 0:
         last_artwork_idx = shelf0_indices_list[-1]
-        for i in range(FRAMES_PER_STEP * 2):  # Double the hold frames
+        for i in tqdm(range(FRAMES_PER_STEP * 2), desc="Step 3: Hold final"):  # Double the hold frames
             img = create_frame("highlight", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background, 
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d, 
@@ -2873,16 +3033,18 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               target_shelf=target_shelf,
                               top_representatives=top_items,
                               aesthetic_representative_id=aesthetic_representative_id)
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
     
     # Step 3.5: Animate grey connection lines disappearing
     print("   Generating step 3.5: Fading out connection lines...")
     FRAMES_FADE_OUT = 30  # Frames to fade out lines
-    for fade_frame in range(FRAMES_FADE_OUT):
+    for fade_frame in tqdm(range(FRAMES_FADE_OUT), desc="Step 3.5: Fade out"):
         fade_progress = 1.0 - (fade_frame + 1) / FRAMES_FADE_OUT  # 1.0 to 0.0
         img = create_frame("highlight", all_coords_2d, all_artwork_ids, shelf0_mask,
-                          white_background=white_background, 
+                          white_background=white_background,
+                          supersample_factor=supersample_factor, 
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d, 
                           shelf0_coords_progressive=shelf0_coords_2d,
@@ -2895,7 +3057,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                           top_representatives=top_items,
                           aesthetic_representative_id=aesthetic_representative_id,
                           connection_lines_opacity=fade_progress)
-        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        # Save with high quality PNG settings
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
     
     # Step 4: Cycle through each Regal artwork showing calculations
@@ -2935,6 +3098,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             lines_to_draw = [(start_coord, artwork_coord, line_progress, False)]
             
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
@@ -2950,13 +3114,15 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               aesthetic_representative_id=aesthetic_representative_id,
                               current_distance=dist,
                               search_mode="representative")
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
         
         # Hold the line and show artwork info
         for i in range(FRAMES_PER_ARTWORK - FRAMES_PER_REP_LINE):
             lines_to_draw = [(start_coord, artwork_coord, 1.0, False)]  # Fully drawn
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
@@ -2972,7 +3138,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               aesthetic_representative_id=aesthetic_representative_id,
                               current_distance=dist,
                               search_mode="representative")
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
     
     # Then show all outliers
@@ -2988,6 +3155,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             lines_to_draw = [(start_coord, artwork_coord, line_progress, False)]
             
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
@@ -3003,13 +3171,15 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               aesthetic_representative_id=aesthetic_representative_id,
                               current_distance=dist,
                               search_mode="outlier")
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
         
         # Hold the line and show artwork info
         for i in range(FRAMES_PER_ARTWORK - FRAMES_PER_REP_LINE):
             lines_to_draw = [(start_coord, artwork_coord, 1.0, False)]  # Fully drawn
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
@@ -3025,7 +3195,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               aesthetic_representative_id=aesthetic_representative_id,
                               current_distance=dist,
                               search_mode="outlier")
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
     
     # Step 5: Draw lines spreading out from centroid (frame by frame)
@@ -3046,7 +3217,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     PAUSE_AFTER_CLOSEST = 60  # Frames to pause after drawing line to closest
     
     lines_drawn = []
-    for line_idx, (artwork_idx, distance, shelf0_idx) in enumerate(shelf0_distances_sorted):
+    for line_idx, (artwork_idx, distance, shelf0_idx) in tqdm(enumerate(shelf0_distances_sorted), desc="Step 5: Drawing lines", total=len(shelf0_distances_sorted)):
         # Get coordinates for this artwork
         artwork_coord = shelf0_coords_2d[shelf0_idx]
         start_coord = centroid_coord_2d
@@ -3073,6 +3244,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                 highlight_idx = artwork_idx
             
             img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
@@ -3086,7 +3258,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               top_representatives=top_items,
                               top_outliers=top_outliers,
                               aesthetic_representative_id=aesthetic_representative_id)
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
         
         # If this is the closest (representative), pause and show it on right side
@@ -3100,6 +3273,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                     lines_to_draw.append((start_coord, prev_coord, 1.0, is_prev_closest))
                 
                 img = create_frame("representative", all_coords_2d, all_artwork_ids, shelf0_mask,
+                              supersample_factor=supersample_factor,
                               white_background=white_background,
                                   all_embeddings=all_embeddings,
                                   shelf0_coords=shelf0_coords_2d,
@@ -3113,7 +3287,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                                   top_representatives=top_items,
                                   top_outliers=top_outliers,
                                   aesthetic_representative_id=aesthetic_representative_id)
-                img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+                # Save with high quality PNG settings
+                img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
                 frame_count += 1
     
     # Step 6: Show top 10 (5 representatives + 5 outliers) appearing one by one with simultaneous line drawing
@@ -3124,7 +3299,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     EASE_IN_FRAMES_TOP10 = 15  # Frames for easing in each item
     
     # First show all 5 representatives one by one
-    for rep_num in range(1, 6):  # 1 to 5
+    for rep_num in tqdm(range(1, 6), desc="Step 6: Representatives"):  # 1 to 5
         for frame_in_item in range(FRAMES_PER_TOP10_ITEM):
             # Calculate easing progress for currently appearing item
             if frame_in_item < EASE_IN_FRAMES_TOP10:
@@ -3134,6 +3309,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             
             img = create_frame("top10", all_coords_2d, all_artwork_ids, shelf0_mask,
                               white_background=white_background,
+                              supersample_factor=supersample_factor,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
@@ -3147,13 +3323,15 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               top10_reps_shown=rep_num,
                               top10_outliers_shown=0,  # Not showing outliers yet
                               top10_item_ease_progress=ease_progress)
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
     
     # Hold all representatives shown for a moment
-    for i in range(FRAMES_PER_STEP // 2):
+    for i in tqdm(range(FRAMES_PER_STEP // 2), desc="Step 6: Hold reps"):
         img = create_frame("top10", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
+                          supersample_factor=supersample_factor,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
@@ -3166,11 +3344,12 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                           aesthetic_outlier_id=aesthetic_outlier_id,
                           top10_reps_shown=5,
                           top10_outliers_shown=0)
-        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        # Save with high quality PNG settings
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
     
     # Then show all 5 outliers one by one
-    for outlier_num in range(1, 6):  # 1 to 5
+    for outlier_num in tqdm(range(1, 6), desc="Step 6: Outliers"):  # 1 to 5
         for frame_in_item in range(FRAMES_PER_TOP10_ITEM):
             # Calculate easing progress for currently appearing item
             if frame_in_item < EASE_IN_FRAMES_TOP10:
@@ -3180,6 +3359,7 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
             
             img = create_frame("top10", all_coords_2d, all_artwork_ids, shelf0_mask,
                               white_background=white_background,
+                              supersample_factor=supersample_factor,
                               all_embeddings=all_embeddings,
                               shelf0_coords=shelf0_coords_2d,
                               centroid_coord=centroid_coord_2d,
@@ -3193,13 +3373,15 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                               top10_reps_shown=5,  # All reps shown
                               top10_outliers_shown=outlier_num,
                               top10_item_ease_progress=ease_progress)
-            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+            # Save with high quality PNG settings
+            img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
             frame_count += 1
     
     # Hold final state with all items shown
-    for i in range(FRAMES_PER_STEP):
+    for i in tqdm(range(FRAMES_PER_STEP), desc="Step 6: Hold final"):
         img = create_frame("top10", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
+                          supersample_factor=supersample_factor,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
@@ -3212,7 +3394,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                           aesthetic_outlier_id=aesthetic_outlier_id,
                           top10_reps_shown=5,
                           top10_outliers_shown=5)
-        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        # Save with high quality PNG settings
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
     
     # Step 7: Draw ruler lines from centroid to representative and outlier
@@ -3220,10 +3403,11 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     FRAMES_PER_RULER = 50  # Frames to draw each ruler line (slower)
     
     # First draw to representative
-    for frame_num in range(FRAMES_PER_RULER):
+    for frame_num in tqdm(range(FRAMES_PER_RULER), desc="Step 7: Representative ruler"):
         progress = (frame_num + 1) / FRAMES_PER_RULER
         img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
+                          supersample_factor=supersample_factor,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
@@ -3237,13 +3421,15 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                           aesthetic_outlier_id=aesthetic_outlier_id,
                           ruler_progress=progress,
                           ruler_to_rep=True)
-        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        # Save with high quality PNG settings
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
     
     # Hold representative ruler for a moment
-    for i in range(FRAMES_PER_STEP // 2):
+    for i in tqdm(range(FRAMES_PER_STEP // 2), desc="Step 7: Hold rep ruler"):
         img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
+                          supersample_factor=supersample_factor,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
@@ -3257,14 +3443,16 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                           aesthetic_outlier_id=aesthetic_outlier_id,
                           ruler_progress=1.0,
                           ruler_to_rep=True)
-        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        # Save with high quality PNG settings
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
     
     # Then draw to outlier (while keeping representative line visible)
-    for frame_num in range(FRAMES_PER_RULER):
+    for frame_num in tqdm(range(FRAMES_PER_RULER), desc="Step 7: Outlier ruler"):
         progress = (frame_num + 1) / FRAMES_PER_RULER
         img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
+                          supersample_factor=supersample_factor,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
@@ -3278,13 +3466,15 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                           aesthetic_outlier_id=aesthetic_outlier_id,
                           ruler_progress=progress,
                           ruler_to_rep=False)
-        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        # Save with high quality PNG settings
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
     
     # Hold both rulers visible with info on right side for a couple seconds
-    for i in range(FRAMES_PER_STEP * 2):  # Hold for 4 seconds (120 frames at 30fps)
+    for i in tqdm(range(FRAMES_PER_STEP * 2), desc="Step 7: Hold final"):  # Hold for 4 seconds (120 frames at 30fps)
         img = create_frame("ruler", all_coords_2d, all_artwork_ids, shelf0_mask,
                           white_background=white_background,
+                          supersample_factor=supersample_factor,
                           all_embeddings=all_embeddings,
                           shelf0_coords=shelf0_coords_2d,
                           centroid_coord=centroid_coord_2d,
@@ -3298,7 +3488,8 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
                           aesthetic_outlier_id=aesthetic_outlier_id,
                           ruler_progress=1.0,
                           ruler_to_rep=False)
-        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG")
+        # Save with high quality PNG settings
+        img.save(frames_dir / f"frame_{frame_count:05d}.png", "PNG", compress_level=1, optimize=False)
         frame_count += 1
     
     print(f"   Generated {frame_count} frames")
@@ -3313,7 +3504,9 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
         "-i", str(frames_dir / "frame_%05d.png"),
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
-        "-crf", "23",
+        "-crf", "18",  # Lower CRF = higher quality (18 is high quality, 23 is default)
+        "-preset", "slow",  # Slower encoding = better quality
+        "-tune", "stillimage",  # Optimize for still images
         str(output_video)
     ]
     
@@ -3361,7 +3554,13 @@ Examples:
         action="store_true",
         help="Use white background with inverted colors (default: black background)"
     )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=2.0,
+        help="Supersampling factor for anti-aliasing (1.0 = no supersampling for fast test renders, 2.0 = 2x resolution for production quality, default: 2.0)"
+    )
     
     args = parser.parse_args()
-    main(target_shelf=args.shelf, mode=args.mode, white_background=args.white_background)
+    main(target_shelf=args.shelf, mode=args.mode, white_background=args.white_background, supersample_factor=args.scale)
 
