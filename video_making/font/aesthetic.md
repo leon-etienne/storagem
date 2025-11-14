@@ -22,6 +22,7 @@
 - **Info Text**: 18pt Thin
 - **Small Text**: 14pt Thin
 - **Table Text**: 16pt Thin
+- **Ruler Step Labels**: 18pt Medium (text in selected boxes)
 
 ---
 
@@ -76,7 +77,7 @@
 ## Stages
 
 ### 1. All Embeddings
-- 60 frames + 3 seconds hold (240 frames total)
+- 60 frames + 2 seconds hold (180 frames total)
 - All points grey
 - Floor plan visible at top left
 
@@ -84,39 +85,49 @@
 - 30 frames per item
 - Items appear one by one with easing
 - No lines or centroid
-- + 3 seconds hold at end
+- + 2 seconds hold at end
 
 ### 3. Highlight with Centroid
 - 20 frames per item
 - **All green dots from Stage 2 already visible**
 - Lines and centroid animate progressively
-- + 3 seconds hold at end
+- + 2 seconds hold at end
 
 ### 3.5. Fade Out Lines
 - 30 frames
 - Grey connection lines fade out
-- + 3 seconds hold at end
+- + 2 seconds hold at end
 
 ### 4. Cycle Through Artworks
 - 25 frames to draw line + hold per artwork
-- Green lines (3px) with distance numbers
+- Green lines (3px) with distance numbers (shown on lines)
 - Subtitle: "Finding Representatives | Distance: X.XXXX" or "Representative Found | Closest to Centroid" / "Outlier Found | Farthest from Centroid"
-- + 3 seconds hold at end
+- + 2 seconds hold at end
 
 ### 5. Draw Lines from Centroid
 - 30 frames per line
 - Lines drawn one by one
-- + 3 seconds hold at end
+- + 2 seconds hold at end
 
 ### 6. Top 10 Items
 - 40 frames per item
-- Section titles: "Representatives" / "Outliers" (32pt Medium, lime green)
+- Section titles: "Closest to Centroid" / "Farthest from Centroid" (32pt Medium, lime green)
 - 5 representatives, then 5 outliers appear one by one
-- + 3 seconds hold at end
+- Selected items use same color as others (no green highlighting)
+- + 2 seconds hold at end
+
+### 6.5. Blink Effect
+- 2 seconds (120 frames)
+- Selected items blink between gray and green
+- Smooth sine wave animation
+- After blink, items stay green and transition to measuring stage
 
 ### 7. Measuring Distances
 - 50 frames per ruler line
-- + 3 seconds hold at end
+- **Gradual animations**:
+  - Circle starts at regular point size, expands to full size over 30 frames
+  - Text fades in over 40 frames (instead of popping out)
+- + 2 seconds hold at end
 - **Layout** (right panel):
   - Image at top (no border)
   - Section label: 28pt Medium, lime green
@@ -145,8 +156,9 @@
 **Top 10 Table**:
 - Section titles: 32pt Medium, lime green
 - Thumbnails: 60px × 60px
-- Font: 16pt Thin
-- Currently appearing item: green highlight
+- Font: 16pt Thin (monofont for content)
+- Selected items: Same color as others (no green highlighting during display)
+- Blink effect: Selected items blink gray→green for 2 seconds after all items shown
 
 ---
 
@@ -168,17 +180,31 @@ OUTLIERS = {0: 479, 1: 386, 2: 326, 3: 82, 4: 424, 5: 310, 6: 93, 7: 96, 8: 343,
 ## Technical
 
 **Video**: 60fps, H.264, CRF 18 (high quality)
-**Output**: `frames/shelf{regal}_both.mp4`
+
+**Output Locations**:
+- **Default**: `video_making/test/frames/shelf{regal}_both/` (frames) and `shelf{regal}_both.mp4` (video)
+- **White Background**: `video_making/test/frames/shelf{regal}_both_white/` (frames) and `shelf{regal}_both_white.mp4` (video)
+- **External Drive** (if mounted): `/Volumes/NO NAME/storageMuseum/frames/shelf{regal}_both/` (falls back to default if not found)
 
 **Rendering**:
 - **Full HD** (default): Renders at 2x (3840×2160) and downscales to 1920×1080 for anti-aliasing
 - **4K**: Renders directly at 3840×2160 (no downscaling)
 - Use `--scale 2.0` for Full HD, `--scale 4.0` for 4K
 
+**UMAP Parameters**:
+- `min_dist=0.1` (slightly increased for better spacing)
+- `spread=18` (increased for more global structure)
+- `n_neighbors=18`
+- `metric='cosine'`
+- `random_state=21`
+
 **Usage**:
 ```bash
-# Full HD (default)
+# Full HD (default, black background)
 python visualize_shelf0_representative.py --shelf 0 --mode both
+
+# Full HD with white background
+python visualize_shelf0_representative.py --shelf 0 --mode both --white-background
 
 # 4K output
 python visualize_shelf0_representative.py --shelf 0 --mode both --scale 4.0
@@ -186,7 +212,6 @@ python visualize_shelf0_representative.py --shelf 0 --mode both --scale 4.0
 # To run for all shelves (0-9), running two processes at a time:
 for shelf in {0..9}; do
     python visualize_shelf0_representative.py --shelf $shelf --mode both &
-    # Wait for every 2nd background job before launching more
     if (( (shelf + 1) % 2 == 0 )); then
         wait
     fi
