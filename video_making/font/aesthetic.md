@@ -61,16 +61,22 @@
 ## Visual Elements
 
 ### Points
-- **Basic Dots**: 4px, dark grey (RGB 80-90)
-- **Regal Points**: 8px, lime green
+- **Basic Dots**: 4px, dark grey (RGB 80-90), no border
+- **Regal Points**: 8px, lime green, no border
 - **Representative Points**: 40px circular thumbnails
 - **Centroid**: Crosshair (12px circle, 20px lines)
 
 ### Lines
-- **Connection Lines**: 1px grey, fade out after highlight stage
-- **Finding Representatives**: 3px green with distance numbers (12pt)
+- **Connection Lines**: 1px grey, fade out with transparency (not blending), no border
+- **Finding Representatives**: 3px green with distance numbers (12pt), no border
 - **Ruler Lines**: 3px green with tick marks, arrowhead, distance label (32pt)
 - **Top 10 Connections**: 1px green between all pairs
+- **Drawing Order**: Grey lines → Grey dots → Text → Green lines → Green dots
+
+### Distance Numbers
+- **On Lines**: 12pt light font, lime green
+- **Background**: Only last measure distance has background rectangle (for readability)
+- **Others**: Transparent text only
 
 ---
 
@@ -190,6 +196,8 @@ OUTLIERS = {0: 479, 1: 386, 2: 326, 3: 82, 4: 424, 5: 310, 6: 93, 7: 96, 8: 343,
 - **Full HD** (default): Renders at 2x (3840×2160) and downscales to 1920×1080 for anti-aliasing
 - **4K**: Renders directly at 3840×2160 (no downscaling)
 - Use `--scale 2.0` for Full HD, `--scale 4.0` for 4K
+- **Image Resizing**: All images use LANCZOS resampling for highest quality
+- **Virtual Render**: `--virtual-render` stores frames in memory and writes directly to video (no intermediate frame files)
 
 **UMAP Parameters**:
 - `min_dist=0.1` (slightly increased for better spacing)
@@ -209,11 +217,11 @@ python visualize_shelf0_representative.py --shelf 0 --mode both --white-backgrou
 # 4K output
 python visualize_shelf0_representative.py --shelf 0 --mode both --scale 4.0
 
-# To run for all shelves (0-9), running two processes at a time:
+# Virtual render (no intermediate frame files, faster)
+python visualize_shelf0_representative.py --shelf 0 --mode both --virtual-render
+
+# To run for all shelves (0-9), one at a time:
 for shelf in {0..9}; do
-    python visualize_shelf0_representative.py --shelf $shelf --mode both &
-    if (( (shelf + 1) % 2 == 0 )); then
-        wait
-    fi
+    python visualize_shelf0_representative.py --shelf $shelf --mode both
 done
-wait
+
