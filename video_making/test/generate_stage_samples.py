@@ -192,7 +192,7 @@ if __name__ == "__main__":
 Examples:
   python generate_stage_samples.py --shelf 0
   python generate_stage_samples.py --shelf 5 --white-background
-  python generate_stage_samples.py -s 9 --scale 1.0
+  python generate_stage_samples.py -s 9 --scale 4.0  # 4K output
         """
     )
     parser.add_argument(
@@ -210,7 +210,7 @@ Examples:
         "--scale",
         type=float,
         default=2.0,
-        help="Supersampling factor for anti-aliasing (1.0 = fast, 2.0 = high quality, default: 2.0)"
+        help="Supersampling factor for anti-aliasing (2.0 = Full HD output, 4.0 = 4K output, default: 2.0)"
     )
     parser.add_argument(
         "--output-dir", "-o",

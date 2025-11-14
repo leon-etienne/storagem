@@ -43,12 +43,15 @@
 
 ## Layout
 
-**Canvas**: 1920×1080px
-- **Map Area**: 1200px (left)
-- **Panel Area**: 720px (right)
+**Canvas**: 
+- **Full HD**: 1920×1080px (default)
+- **4K**: 3840×2160px (use `--scale 4.0`)
+- **Map Area**: 1200px (Full HD) / 2400px (4K) (left)
+- **Panel Area**: 720px (Full HD) / 1440px (4K) (right)
 
 **Positions**:
-- Subtitle: 60px from top
+- Floor plan: Top left (50px from left, 60px from top), rotated 90° counter-clockwise, max 300px
+- Subtitle: Right side of title, vertically centered
 - Panel content: 60px from top
 - Title: 50px from left, 100px from bottom
 
@@ -73,39 +76,47 @@
 ## Stages
 
 ### 1. All Embeddings
-- 60 frames
+- 60 frames + 3 seconds hold (240 frames total)
 - All points grey
+- Floor plan visible at top left
 
 ### 2. Identify Regal Items
 - 30 frames per item
 - Items appear one by one with easing
 - No lines or centroid
+- + 3 seconds hold at end
 
 ### 3. Highlight with Centroid
 - 20 frames per item
 - **All green dots from Stage 2 already visible**
 - Lines and centroid animate progressively
+- + 3 seconds hold at end
 
 ### 3.5. Fade Out Lines
 - 30 frames
 - Grey connection lines fade out
+- + 3 seconds hold at end
 
 ### 4. Cycle Through Artworks
 - 25 frames to draw line + hold per artwork
 - Green lines (3px) with distance numbers
 - Subtitle: "Finding Representatives | Distance: X.XXXX" or "Representative Found | Closest to Centroid" / "Outlier Found | Farthest from Centroid"
+- + 3 seconds hold at end
 
 ### 5. Draw Lines from Centroid
 - 30 frames per line
 - Lines drawn one by one
+- + 3 seconds hold at end
 
 ### 6. Top 10 Items
 - 40 frames per item
 - Section titles: "Representatives" / "Outliers" (32pt Medium, lime green)
 - 5 representatives, then 5 outliers appear one by one
+- + 3 seconds hold at end
 
 ### 7. Measuring Distances
 - 50 frames per ruler line
+- + 3 seconds hold at end
 - **Layout** (right panel):
   - Image at top (no border)
   - Section label: 28pt Medium, lime green
@@ -142,9 +153,9 @@
 ## Data
 
 **Files**:
-- CSV: `artworks_with_thumbnails_ting.csv`
+- CSV: `artworks_with_thumbnails_final.csv`
 - Embeddings: `embeddings_cache/all_embeddings.pkl`
-- Images: `production-export-2025-11-13t13-42-48-005z/images/`
+- Images: `production-export-2025-11-14t12-58-07-436z/images/`
 
 **Curation**:
 ```python
@@ -156,12 +167,21 @@ OUTLIERS = {0: 479, 1: 386, 2: 326, 3: 82, 4: 424, 5: 310, 6: 93, 7: 96, 8: 343,
 
 ## Technical
 
-**Video**: 60fps, H.264, CRF 23
+**Video**: 60fps, H.264, CRF 18 (high quality)
 **Output**: `frames/shelf{regal}_both.mp4`
+
+**Rendering**:
+- **Full HD** (default): Renders at 2x (3840×2160) and downscales to 1920×1080 for anti-aliasing
+- **4K**: Renders directly at 3840×2160 (no downscaling)
+- Use `--scale 2.0` for Full HD, `--scale 4.0` for 4K
 
 **Usage**:
 ```bash
+# Full HD (default)
 python visualize_shelf0_representative.py --shelf 0 --mode both
+
+# 4K output
+python visualize_shelf0_representative.py --shelf 0 --mode both --scale 4.0
 
 # To run for all shelves (0-9), running two processes at a time:
 for shelf in {0..9}; do
