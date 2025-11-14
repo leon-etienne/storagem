@@ -148,7 +148,7 @@
 
 **Curation**:
 ```python
-REPRESENTATIVES = {0: 464, 1: 152, 2: 161, 3: 376, 4: 454, 5: 360, 6: 468, 7: 107, 8: 389, 9: 185}
+REPRESENTATIVES = {0: 464, 1: 152, 2: 161, 3: 119, 4: 454, 5: 360, 6: 468, 7: 107, 8: 385, 9: 185}
 OUTLIERS = {0: 479, 1: 386, 2: 326, 3: 82, 4: 424, 5: 310, 6: 93, 7: 96, 8: 343, 9: 441}
 ```
 
@@ -162,4 +162,13 @@ OUTLIERS = {0: 479, 1: 386, 2: 326, 3: 82, 4: 424, 5: 310, 6: 93, 7: 96, 8: 343,
 **Usage**:
 ```bash
 python visualize_shelf0_representative.py --shelf 0 --mode both
-```
+
+# To run for all shelves (0-9), running two processes at a time:
+for shelf in {0..9}; do
+    python visualize_shelf0_representative.py --shelf $shelf --mode both &
+    # Wait for every 2nd background job before launching more
+    if (( (shelf + 1) % 2 == 0 )); then
+        wait
+    fi
+done
+wait

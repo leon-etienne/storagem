@@ -661,6 +661,36 @@ def create_frame(
     if centroid_coord is not None:
         centroid_coord = (centroid_coord[0] * scale, centroid_coord[1] * scale) if isinstance(centroid_coord, (tuple, list)) else centroid_coord * scale
     
+    # Scale lines_to_draw coordinates (they're in the same coordinate space as all_coords_2d)
+    if lines_to_draw is not None:
+        scaled_lines_to_draw = []
+        for line_data in lines_to_draw:
+            if len(line_data) == 4:  # (start, end, progress, is_closest)
+                start, end, progress, is_closest = line_data
+                # Scale start and end coordinates - convert to tuples for consistency
+                if isinstance(start, np.ndarray):
+                    start = (float(start[0] * scale), float(start[1] * scale))
+                elif isinstance(start, (tuple, list)) and len(start) >= 2:
+                    start = (float(start[0] * scale), float(start[1] * scale))
+                if isinstance(end, np.ndarray):
+                    end = (float(end[0] * scale), float(end[1] * scale))
+                elif isinstance(end, (tuple, list)) and len(end) >= 2:
+                    end = (float(end[0] * scale), float(end[1] * scale))
+                scaled_lines_to_draw.append((start, end, progress, is_closest))
+            else:  # (start, end, progress)
+                start, end, progress = line_data
+                # Scale start and end coordinates - convert to tuples for consistency
+                if isinstance(start, np.ndarray):
+                    start = (float(start[0] * scale), float(start[1] * scale))
+                elif isinstance(start, (tuple, list)) and len(start) >= 2:
+                    start = (float(start[0] * scale), float(start[1] * scale))
+                if isinstance(end, np.ndarray):
+                    end = (float(end[0] * scale), float(end[1] * scale))
+                elif isinstance(end, (tuple, list)) and len(end) >= 2:
+                    end = (float(end[0] * scale), float(end[1] * scale))
+                scaled_lines_to_draw.append((start, end, progress))
+        lines_to_draw = scaled_lines_to_draw
+    
     # Scale size constants
     POINT_SIZE_SCALED = POINT_SIZE * scale
     POINT_SIZE_LARGE_SCALED = POINT_SIZE_LARGE * scale
@@ -693,9 +723,26 @@ def create_frame(
         "ruler": "Measuring Distances",
         "representatives": "Top 10 Representatives",
         "zoom": "Selected Representative",
-        "outlier": "Outlier Found"
+        "outlier": "Outlier Found",
+        "top10": "Top 10 Representatives and Outliers"
     }
     step_text = step_labels.get(step, step)
+    
+    # Add distance display for top10 step
+    if step == "top10":
+        # Calculate current distance being displayed based on what's shown
+        current_display_distance = None
+        if top10_reps_shown is not None and top10_reps_shown > 0 and top_representatives is not None:
+            # Show distance of the currently appearing representative
+            if top10_reps_shown <= len(top_representatives):
+                current_display_distance = top_representatives[top10_reps_shown - 1][1]
+        elif top10_outliers_shown is not None and top10_outliers_shown > 0 and top_outliers is not None:
+            # Show distance of the currently appearing outlier
+            if top10_outliers_shown <= len(top_outliers):
+                current_display_distance = top_outliers[top10_outliers_shown - 1][1]
+        
+        if current_display_distance is not None:
+            step_text += f" | Distance: {current_display_distance:.4f}"
     
     # Add search mode and distance to subtitle for representative step
     if step == "representative":
@@ -2327,12 +2374,61 @@ def create_frame(
                     
                     # Use monofont for content
                     draw.text((panel_x + int(80 * scale), y_pos), f"{rank + 1}", fill=row_color, font=font_table_content)
-                    title = str(artwork.get("title", "Unknown"))[:30]
-                    draw.text((panel_x + int(140 * scale), y_pos), title, fill=row_color, font=font_table_content)
-                    artist = str(artwork.get("artist", "Unknown"))[:25]
-                    draw.text((panel_x + int(350 * scale), y_pos), artist, fill=row_color, font=font_table_content)
+                    
+                    # Title with text wrapping (constraint box: from 140 to 350)
+                    title = str(artwork.get("title", "Unknown"))
+                    title_x = panel_x + int(140 * scale)
+                    title_max_width = int(350 * scale) - title_x - int(10 * scale)  # Leave 10px margin
+                    title_words = title.split()
+                    title_lines = []
+                    current_line = ""
+                    for word in title_words:
+                        test_line = current_line + (" " if current_line else "") + word
+                        bbox = draw.textbbox((0, 0), test_line, font=font_table_content)
+                        if bbox[2] - bbox[0] <= title_max_width:
+                            current_line = test_line
+                        else:
+                            if current_line:
+                                title_lines.append(current_line)
+                            current_line = word
+                    if current_line:
+                        title_lines.append(current_line)
+                    # Draw title (max 2 lines)
+                    title_y = y_pos
+                    for line in title_lines[:2]:
+                        draw.text((title_x, title_y), line, fill=row_color, font=font_table_content)
+                        title_y += int(18 * scale)
+                    
+                    # Artist with text wrapping (constraint box: from 350 to 520)
+                    artist = str(artwork.get("artist", "Unknown"))
+                    artist_x = panel_x + int(350 * scale)
+                    artist_max_width = int(520 * scale) - artist_x - int(10 * scale)  # Leave 10px margin
+                    artist_words = artist.split()
+                    artist_lines = []
+                    current_line = ""
+                    for word in artist_words:
+                        test_line = current_line + (" " if current_line else "") + word
+                        bbox = draw.textbbox((0, 0), test_line, font=font_table_content)
+                        if bbox[2] - bbox[0] <= artist_max_width:
+                            current_line = test_line
+                        else:
+                            if current_line:
+                                artist_lines.append(current_line)
+                            current_line = word
+                    if current_line:
+                        artist_lines.append(current_line)
+                    # Draw artist (max 2 lines)
+                    artist_y = y_pos
+                    for line in artist_lines[:2]:
+                        draw.text((artist_x, artist_y), line, fill=row_color, font=font_table_content)
+                        artist_y += int(18 * scale)
+                    
+                    # Distance
                     draw.text((panel_x + int(520 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_table_content)
-                    y_pos += int(70 * scale)
+                    
+                    # Calculate row height based on max lines (title or artist)
+                    max_lines = max(len(title_lines[:2]), len(artist_lines[:2]), 1)
+                    y_pos += int(max(70 * scale, max_lines * 18 * scale + 10 * scale))  # At least 70px, or based on content
             except Exception:
                 pass
         
@@ -2395,12 +2491,61 @@ def create_frame(
                     
                     # Use monofont for content
                     draw.text((panel_x + int(80 * scale), y_pos), f"{rank + 1}", fill=row_color, font=font_table_content)
-                    title = str(artwork.get("title", "Unknown"))[:30]
-                    draw.text((panel_x + int(140 * scale), y_pos), title, fill=row_color, font=font_table_content)
-                    artist = str(artwork.get("artist", "Unknown"))[:25]
-                    draw.text((panel_x + int(350 * scale), y_pos), artist, fill=row_color, font=font_table_content)
+                    
+                    # Title with text wrapping (constraint box: from 140 to 350)
+                    title = str(artwork.get("title", "Unknown"))
+                    title_x = panel_x + int(140 * scale)
+                    title_max_width = int(350 * scale) - title_x - int(10 * scale)  # Leave 10px margin
+                    title_words = title.split()
+                    title_lines = []
+                    current_line = ""
+                    for word in title_words:
+                        test_line = current_line + (" " if current_line else "") + word
+                        bbox = draw.textbbox((0, 0), test_line, font=font_table_content)
+                        if bbox[2] - bbox[0] <= title_max_width:
+                            current_line = test_line
+                        else:
+                            if current_line:
+                                title_lines.append(current_line)
+                            current_line = word
+                    if current_line:
+                        title_lines.append(current_line)
+                    # Draw title (max 2 lines)
+                    title_y = y_pos
+                    for line in title_lines[:2]:
+                        draw.text((title_x, title_y), line, fill=row_color, font=font_table_content)
+                        title_y += int(18 * scale)
+                    
+                    # Artist with text wrapping (constraint box: from 350 to 520)
+                    artist = str(artwork.get("artist", "Unknown"))
+                    artist_x = panel_x + int(350 * scale)
+                    artist_max_width = int(520 * scale) - artist_x - int(10 * scale)  # Leave 10px margin
+                    artist_words = artist.split()
+                    artist_lines = []
+                    current_line = ""
+                    for word in artist_words:
+                        test_line = current_line + (" " if current_line else "") + word
+                        bbox = draw.textbbox((0, 0), test_line, font=font_table_content)
+                        if bbox[2] - bbox[0] <= artist_max_width:
+                            current_line = test_line
+                        else:
+                            if current_line:
+                                artist_lines.append(current_line)
+                            current_line = word
+                    if current_line:
+                        artist_lines.append(current_line)
+                    # Draw artist (max 2 lines)
+                    artist_y = y_pos
+                    for line in artist_lines[:2]:
+                        draw.text((artist_x, artist_y), line, fill=row_color, font=font_table_content)
+                        artist_y += int(18 * scale)
+                    
+                    # Distance
                     draw.text((panel_x + int(520 * scale), y_pos), f"{distance:.4f}", fill=row_color, font=font_table_content)
-                    y_pos += int(70 * scale)
+                    
+                    # Calculate row height based on max lines (title or artist)
+                    max_lines = max(len(title_lines[:2]), len(artist_lines[:2]), 1)
+                    y_pos += int(max(70 * scale, max_lines * 18 * scale + 10 * scale))  # At least 70px, or based on content
             except Exception:
                 pass
     
@@ -2843,22 +2988,27 @@ def create_frame(
     return img
 
 
-def main(target_shelf: str = "0", mode: str = "both", white_background: bool = False, supersample_factor: float = 2.0):
-    """Main function to generate visualization frames and video.
+def prepare_visualization_data(target_shelf: str = "0"):
+    """Prepare all data needed for visualization.
     
-    Args:
-        target_shelf: The Regal number to visualize (as string, e.g., "0", "5")
-        mode: "representative", "outlier", or "both" - which type to visualize (default: "both")
-        white_background: If True, use white background with inverted colors (default: False)
+    Returns a dictionary with all the prepared data:
+    - df: Full dataframe
+    - df_shelf0: Filtered dataframe for target shelf
+    - all_embeddings: All embeddings array
+    - all_artwork_ids: List of artwork IDs matching embeddings
+    - shelf0_mask: Boolean mask for shelf0 items
+    - shelf0_embeddings: Embeddings for shelf0 items
+    - all_coords_2d: 2D coordinates for all items
+    - shelf0_coords_2d: 2D coordinates for shelf0 items
+    - centroid: Centroid of shelf0 embeddings
+    - distances: Distances from centroid for shelf0 items
+    - top_representatives: List of (artwork_idx_in_all, distance) tuples
+    - top_outliers: List of (artwork_idx_in_all, distance) tuples
+    - aesthetic_representative_id: Aesthetic representative ID
+    - aesthetic_outlier_id: Aesthetic outlier ID
+    - first_idx_in_all: Index of first representative in all_artwork_ids
+    - artwork_lookup: Lookup dictionary for artwork data
     """
-    print("=" * 60)
-    if mode == "both":
-        print(f"Visualizing Regal {target_shelf} Representatives and Outliers")
-    else:
-        mode_title = "Representative" if mode == "representative" else "Outlier"
-        print(f"Visualizing Regal {target_shelf} {mode_title} Finding Process")
-    print("=" * 60)
-    
     # Load data
     print("\n1. Loading data...")
     df = pd.read_csv(str(CSV_PATH))
@@ -2984,9 +3134,10 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     distances = np.linalg.norm(shelf0_embeddings - centroid, axis=1)
     
     # Get aesthetic IDs from aesthetic.md - these are the curated selections
+    # Matches aesthetic.md curation (video_making/font/aesthetic.md lines 150-152)
     REPRESENTATIVES = {
-        0: 464, 1: 152, 2: 161, 3: 376, 4: 454,
-        5: 360, 6: 468, 7: 107, 8: 389, 9: 185
+        0: 464, 1: 152, 2: 161, 3: 119, 4: 454,
+        5: 360, 6: 468, 7: 107, 8: 385, 9: 185
     }
     OUTLIERS = {
         0: 479, 1: 386, 2: 326, 3: 82, 4: 424,
@@ -3115,7 +3266,82 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     first_artwork_id = df_shelf0.iloc[first_idx_in_shelf0].get("id") if first_idx_in_shelf0 is not None else None
     first_idx_in_all = top_representatives[0][0] if top_representatives else None
     
+    # Project centroid to 2D
+    # Use the mean of 2D coordinates directly - this is the most accurate approach
+    centroid_coord_2d = np.mean(shelf0_coords_2d, axis=0)
+    
+    # Build artwork lookup dictionary for fast DataFrame access
+    print("\n5. Building artwork lookup...")
+    artwork_lookup = build_artwork_lookup(df)
+    
+    return {
+        "df": df,
+        "df_shelf0": df_shelf0,
+        "all_embeddings": all_embeddings,
+        "all_artwork_ids": all_artwork_ids,
+        "shelf0_mask": shelf0_mask,
+        "shelf0_embeddings": shelf0_embeddings,
+        "all_coords_2d": all_coords_2d,
+        "shelf0_coords_2d": shelf0_coords_2d,
+        "centroid": centroid,
+        "centroid_coord_2d": centroid_coord_2d,
+        "distances": distances,
+        "top_representatives": top_representatives,
+        "top_outliers": top_outliers,
+        "top_items": top_items,
+        "aesthetic_representative_id": aesthetic_representative_id,
+        "aesthetic_outlier_id": aesthetic_outlier_id,
+        "first_idx_in_all": first_idx_in_all,
+        "artwork_lookup": artwork_lookup,
+    }
+
+
+def main(target_shelf: str = "0", mode: str = "both", white_background: bool = False, supersample_factor: float = 2.0):
+    """Main function to generate visualization frames and video.
+    
+    Args:
+        target_shelf: The Regal number to visualize (as string, e.g., "0", "5")
+        mode: "representative", "outlier", or "both" - which type to visualize (default: "both")
+        white_background: If True, use white background with inverted colors (default: False)
+    """
+    print("=" * 60)
+    if mode == "both":
+        print(f"Visualizing Regal {target_shelf} Representatives and Outliers")
+    else:
+        mode_title = "Representative" if mode == "representative" else "Outlier"
+        print(f"Visualizing Regal {target_shelf} {mode_title} Finding Process")
+    print("=" * 60)
+    
+    # Prepare all visualization data using the shared function
+    data = prepare_visualization_data(target_shelf)
+    
+    # Extract all needed variables from the data dictionary
+    df = data["df"]
+    df_shelf0 = data["df_shelf0"]
+    all_embeddings = data["all_embeddings"]
+    all_artwork_ids = data["all_artwork_ids"]
+    shelf0_mask = data["shelf0_mask"]
+    shelf0_embeddings = data["shelf0_embeddings"]
+    all_coords_2d = data["all_coords_2d"]
+    shelf0_coords_2d = data["shelf0_coords_2d"]
+    centroid = data["centroid"]
+    centroid_coord_2d = data["centroid_coord_2d"]
+    distances = data["distances"]
+    top_representatives = data["top_representatives"]
+    top_outliers = data["top_outliers"]
+    top_items = data["top_items"]
+    aesthetic_representative_id = data["aesthetic_representative_id"]
+    aesthetic_outlier_id = data["aesthetic_outlier_id"]
+    first_idx_in_all = data["first_idx_in_all"]
+    artwork_lookup = data["artwork_lookup"]
+    
+    # Get additional info for logging
+    first_idx_in_shelf0 = np.argsort(distances)[0] if len(distances) > 0 else None
+    first_artwork_id = df_shelf0.iloc[first_idx_in_shelf0].get("id") if first_idx_in_shelf0 is not None else None
+    
     # Verify aesthetic IDs are included
+    top_5_representatives_indices = np.argsort(distances)[:5]
+    top_5_outliers_indices = np.argsort(distances)[-5:][::-1]
     if aesthetic_representative_id is not None:
         rep_ids_in_top5 = [df_shelf0.iloc[i].get("id") for i in top_5_representatives_indices]
         print(f"   Aesthetic representative ID {aesthetic_representative_id} {'found' if any(str(aid) == str(aesthetic_representative_id) or float(aid) == float(aesthetic_representative_id) for aid in rep_ids_in_top5) else 'NOT FOUND'} in top 5 representatives")
@@ -3123,15 +3349,6 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     if aesthetic_outlier_id is not None:
         outlier_ids_in_top5 = [df_shelf0.iloc[i].get("id") for i in top_5_outliers_indices]
         print(f"   Aesthetic outlier ID {aesthetic_outlier_id} {'found' if any(str(aid) == str(aesthetic_outlier_id) or float(aid) == float(aesthetic_outlier_id) for aid in outlier_ids_in_top5) else 'NOT FOUND'} in top 5 outliers")
-    
-    # Project centroid to 2D
-    # Use the mean of 2D coordinates directly - this is the most accurate approach
-    # because:
-    # 1. The 2D coordinates already correctly represent the Regal items
-    # 2. The mean of 2D coords will be in the center of the Regal cluster
-    # 3. UMAP/t-SNE transform for new points (like the centroid) can be unreliable
-    centroid_coord_2d = np.mean(shelf0_coords_2d, axis=0)
-    print(f"   Centroid 2D position calculated as mean of Regal {target_shelf} coordinates")
     
     # Validate centroid coordinate
     if len(shelf0_coords_2d) > 0:
@@ -3145,9 +3362,6 @@ def main(target_shelf: str = "0", mode: str = "both", white_background: bool = F
     if first_idx_in_shelf0 is not None:
         print(f"   Distance to centroid: {distances[first_idx_in_shelf0]:.4f}")
     
-    # Build artwork lookup dictionary for fast DataFrame access
-    print("\n5. Building artwork lookup...")
-    artwork_lookup = build_artwork_lookup(df)
     print(f"   Built lookup for {len(artwork_lookup)} artwork ID mappings")
     
     # Generate frames
