@@ -28,7 +28,7 @@ TITLE_COLUMN = "title"
 ARTIST_COLUMN = "artist"          # change if your CSV uses another name
 IMAGE_COLUMN = "image"            # full-size image for the right panel
 THUMB_COLUMN = "thumbnail"        # small thumb for the scatter map
-SHELF_COLUMN = "shelfNo"          # <-- your shelf column
+SHELF_COLUMN = "shelfNo"          # your shelf column
 
 TEXT_WEIGHT = 0.7                 # balance image vs text in embedding
 TOP_K_DEFAULT = 15
@@ -81,7 +81,7 @@ if ID_COLUMN in df.columns:
 else:
     df["id_norm"] = [str(i) for i in range(len(df))]
 
-# Only keep rows with a thumbnail (and optionally an image)
+# Only keep rows with a thumbnail
 if THUMB_COLUMN in df.columns:
     df = df[df[THUMB_COLUMN].notna()].copy()
 else:
@@ -101,18 +101,15 @@ if ARTIST_COLUMN in df.columns:
 else:
     df[ARTIST_COLUMN] = ""
 
-# Shelf column: expected to be numeric-ish
+# Shelf column → "shelf_id" numeric where possible
 if SHELF_COLUMN in df.columns:
-    # If there are NaNs, set them to a default shelf (e.g. 0)
     df[SHELF_COLUMN] = df[SHELF_COLUMN].fillna(0)
-    # cast to int if possible
     try:
         df["shelf_id"] = df[SHELF_COLUMN].astype(int)
     except Exception:
-        # if that fails, cast to string and later the frontend can handle mapping differently
+        # fallback: keep as string if casting fails
         df["shelf_id"] = df[SHELF_COLUMN].astype(str)
 else:
-    # default shelf id 0 if column missing
     df["shelf_id"] = 0
 
 ids = df["id_norm"].tolist()
@@ -120,17 +117,20 @@ titles = df[TITLE_COLUMN].fillna("").astype(str).tolist()
 artists = df[ARTIST_COLUMN].tolist()
 image_paths = df[IMAGE_COLUMN].tolist()
 thumb_paths = df[THUMB_COLUMN].tolist()
-shelf_ids = df["shelf_id"].tolist()
+shelf_ids_raw = df["shelf_id"].tolist()   # might be int or str
+
+# also keep a clean numeric shelf number for search results, if possible
+shelf_numbers: List[Optional[int]] = []
+for v in shelf_ids_raw:
+    try:
+        shelf_numbers.append(int(v))
+    except Exception:
+        shelf_numbers.append(None)
+
 metadata_texts = [build_metadata_text(row) for _, row in df.iterrows()]
 
 num_items = len(df)
 print(f"Using {num_items} rows with thumbnails.")
-
-# Optionally make paths absolute or prepend a root directory here
-# IMAGE_ROOT = "/absolute/path/to/images"
-# image_paths = [os.path.join(IMAGE_ROOT, p) for p in image_paths]
-# thumb_paths = [os.path.join(IMAGE_ROOT, p) for p in thumb_paths]
-
 
 # ----------------------------
 # Build embeddings (image + text)
@@ -181,7 +181,6 @@ with torch.no_grad():
 
 print(f"Embedding matrix shape: {all_embs.shape}")
 
-
 # ----------------------------
 # Build FAISS index (cosine via inner product)
 # ----------------------------
@@ -189,7 +188,6 @@ faiss.normalize_L2(all_embs)
 index = faiss.IndexFlatIP(emb_dim)
 index.add(all_embs)
 print(f"FAISS index built with {index.ntotal} vectors.")
-
 
 # ----------------------------
 # 2D projection with t-SNE
@@ -224,15 +222,17 @@ class Point(BaseModel):
     thumb: str
     x: float
     y: float
-    shelf_id: Optional[int]  # or str if your CSV was non-numeric
+    shelf_id: Optional[int]  # numeric shelf index used by frontend if needed
 
 
 class SearchResult(BaseModel):
     id: str
     title: str
     artist: Optional[str]
-    image: str
+    image: str    # full-size for right panel
+    thumb: str    # thumbnail if you want it later
     score: float
+    shelfNo: Optional[int]   # <-- used by frontend for shelf map
 
 
 class SearchResponse(BaseModel):
@@ -258,19 +258,13 @@ app.add_middleware(
 def get_points():
     """
     Return all points with 2D coordinates for visualization.
-    Fields used by the frontend:
+    Used by the embedding map:
       - id, title, artist, thumb, x, y, shelf_id
-      - image is also included but used mainly in search results panel.
+      - image is also included but mainly used by the right panel.
     """
     points_out: List[Point] = []
     for i in range(num_items):
-        shelf_raw = shelf_ids[i]
-        # if shelf_id ended up as string, you can keep it; frontend only expects a number 0..9.
-        # here we try to cast to int, else keep as is.
-        try:
-            shelf_val = int(shelf_raw)
-        except Exception:
-            shelf_val = None
+        shelf_val = shelf_numbers[i]  # already Optional[int]
 
         points_out.append(
             Point(
@@ -321,15 +315,22 @@ def search(
     for score, idx in zip(distances, indices):
         if idx < 0:
             continue
+
+        shelf_no = shelf_numbers[idx]  # Optional[int]
+
         results.append(
             SearchResult(
                 id=ids[idx],
                 title=titles[idx],
                 artist=artists[idx],
-                image=image_paths[idx],  # full-size for right panel
+                image=image_paths[idx],   # full-size
+                thumb=thumb_paths[idx],   # small version
                 score=float(score),
+                shelfNo=shelf_no,
             )
         )
 
     return SearchResponse(results=results)
+
+# Run with:
 # uvicorn backend:app --reload --port 8000

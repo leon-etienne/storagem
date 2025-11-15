@@ -573,7 +573,6 @@
     // RESULTS PANEL (GRID SLOTS, FULL IMAGES)
     // ----------------------------
     function renderResults(results) {
-      // 10 slots max
       const maxSlots = 10;
       for (let i = 0; i < maxSlots; i++) {
         const slot = document.querySelector(`.result-slot.slot-${i}`);
@@ -583,7 +582,7 @@
           slot.innerHTML = "";
           continue;
         }
-        const shelf = r.shelf_id ?? pointShelfById.get(r.id);
+        const shelf = pointShelfById.get(r.id);
         slot.innerHTML = `
           <div class="result-card">
             <div class="result-card-header">
@@ -702,12 +701,16 @@
       }
     }
 
+    // *** MODIFIED: animated Voronoi for shelves ***
     function drawShelfVoronoi(voronoiPoints, widthLocal, heightLocal) {
       if (!shelfVoronoiLayer) return;
 
       const selectedPoints = voronoiPoints.filter(p => selectedShelves.has(p.id));
       if (!selectedPoints.length) {
-        shelfVoronoiLayer.selectAll("path.shelf-voronoi-cell").remove();
+        shelfVoronoiLayer.selectAll("path.shelf-voronoi-cell")
+          .transition().duration(250)
+          .style("opacity", 0)
+          .remove();
         return;
       }
 
@@ -726,12 +729,30 @@
         }
       }
 
-      shelfVoronoiLayer
+      const paths = shelfVoronoiLayer
         .selectAll("path.shelf-voronoi-cell")
-        .data(cells, d => d.id)
-        .join("path")
+        .data(cells, d => d.id);
+
+      // exit: fade out
+      paths.exit()
+        .transition().duration(250)
+        .style("opacity", 0)
+        .remove();
+
+      // update: morph to new shape
+      paths
+        .transition().duration(250)
+        .attr("d", d => "M" + d.path.join("L") + "Z")
+        .style("opacity", 1);
+
+      // enter: fade in
+      paths.enter()
+        .append("path")
         .attr("class", "shelf-voronoi-cell")
-        .attr("d", d => "M" + d.path.join("L") + "Z");
+        .attr("d", d => "M" + d.path.join("L") + "Z")
+        .style("opacity", 0)
+        .transition().duration(250)
+        .style("opacity", 1);
     }
 
     // Load external SVG for the heatmap scene
@@ -893,19 +914,18 @@
           .attr("fill", "#ffffff")
           .attr("opacity", 1.0);
 
-        // Shelf labels (double digits, bigger)
+        // *** MODIFIED: shelf labels flipped 180° ***
         voronoiG.selectAll("text.shelf-label")
           .data(voronoiPoints, d => d.id)
           .enter()
           .append("text")
           .attr("class", "shelf-label")
-          .attr("x", d => d.x)
-          .attr("y", d => d.y)
+          .attr("transform", d => `translate(${d.x},${d.y}) rotate(180)`)
           .attr("dy", "0.35em")
           .attr("text-anchor", "middle")
           .text(d => String(d.id).padStart(2, "0"));
 
-        // Dynamic Voronoi for selected shelves
+        // Dynamic Voronoi for selected shelves (animated)
         shelfVoronoiLayer = voronoiG.append("g")
           .attr("class", "shelf-voronoi-layer");
 
@@ -1050,7 +1070,7 @@
           .attr("y", heatCentroid.y - 14);
       }
 
-      // dynamic Voronoi for selected shelves
+      // dynamic Voronoi for selected shelves (animated)
       const heatmapGNode = d3.select(".heatmap-layer").node();
       if (heatmapGNode) {
         const voronoiPoints = heatmapGNode.__voronoiPoints__;
