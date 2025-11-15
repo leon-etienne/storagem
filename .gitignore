@@ -43,3 +43,13 @@ Icon?
 # Video making folder
 # /video_making/
 *.mp4
+
+# Whitelist only PNG files inside video_making/font/
+!video_making/font/
+!video_making/font/*.png
+!video_making/font/map/*.png
+!video_making/font/map_white/*.png
+!video_making/font/no_image.png
+!video_making/font/Neue Haas Unica W1G*.ttf
+!video_making/font/UbuntuMono-Regular.ttf
+!video_making/font/aesthetic.md
