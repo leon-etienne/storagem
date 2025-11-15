@@ -47,7 +47,6 @@ def generate_stage_samples(target_shelf: str = "0", white_background: bool = Fal
     distances = data["distances"]
     top_representatives = data["top_representatives"]
     top_outliers = data["top_outliers"]
-    top_items = data["top_items"]
     aesthetic_representative_id = data["aesthetic_representative_id"]
     aesthetic_outlier_id = data["aesthetic_outlier_id"]
     first_idx_in_all = data["first_idx_in_all"]
@@ -61,7 +60,7 @@ def generate_stage_samples(target_shelf: str = "0", white_background: bool = Fal
     # Stage 1: All embeddings
     print("   Stage 1: All embeddings")
     img = create_frame("all", all_coords_2d, all_artwork_ids, shelf0_mask, all_embeddings,
-                      target_shelf=target_shelf, top_representatives=top_items,
+                      target_shelf=target_shelf, top_representatives=top_representatives,
                       aesthetic_representative_id=aesthetic_representative_id,
                       white_background=white_background, supersample_factor=supersample_factor,
                       artwork_lookup=artwork_lookup, df=df)
@@ -85,7 +84,7 @@ def generate_stage_samples(target_shelf: str = "0", white_background: bool = Fal
                           num_shelf0_shown=num_shown,
                           highlighted_artwork_idx=current_artwork_idx,
                           target_shelf=target_shelf,
-                          top_representatives=top_items,
+                          top_representatives=top_representatives,
                           aesthetic_representative_id=aesthetic_representative_id)
         img.save(output_dir / "02_identify_regal_items.png", "PNG", compress_level=1, optimize=False)
     
@@ -105,7 +104,7 @@ def generate_stage_samples(target_shelf: str = "0", white_background: bool = Fal
                           num_shelf0_shown=num_shelf0,
                           highlighted_artwork_idx=last_artwork_idx,
                           target_shelf=target_shelf,
-                          top_representatives=top_items,
+                          top_representatives=top_representatives,
                           aesthetic_representative_id=aesthetic_representative_id)
         img.save(output_dir / "03_highlight_with_centroid.png", "PNG", compress_level=1, optimize=False)
     
