@@ -1,0 +1,502 @@
+/* -----------------------------
+   FONTS (from ./fonts)
+------------------------------*/
+
+@font-face {
+  font-family: "Neue Haas Unica";
+  src: url("./fonts/Neue Haas Unica W1G Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Neue Haas Unica";
+  src: url("./fonts/Neue Haas Unica W1G Medium.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Neue Haas Unica";
+  src: url("./fonts/Neue Haas Unica W1G Light.ttf") format("truetype");
+  font-weight: 300;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Neue Haas Unica";
+  src: url("./fonts/Neue Haas Unica W1G Thin.ttf") format("truetype");
+  font-weight: 200;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Ubuntu Mono";
+  src: url("./fonts/UbuntuMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "Ubuntu Mono";
+  src: url("./fonts/UbuntuMono-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+}
+
+/* -----------------------------
+   ROOT VARIABLES
+------------------------------*/
+
+:root {
+  --bg-color: #000000;
+  --text-color: #ffffff;
+
+  --node-color: rgb(200, 200, 200);
+  --node-highlight-color: #32cd32;
+  --node-stroke-color: #ffffff;
+
+  --centroid-stroke-color: #ffffff;
+  /* bumped up for larger centroid */
+  --centroid-circle-radius: 20;
+  --centroid-line-half-length: 28;
+
+  --axis-stroke-color: #cccccc;
+  --axis-text-color: #dddddd;
+
+  --voronoi-stroke-color: #888888;
+  --shelf-voronoi-stroke: #00ff00;
+
+  --font-ui: "Neue Haas Unica", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-heading: "Neue Haas Unica", system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-mono: "Ubuntu Mono", monospace;
+
+  --base-font-size: 20px;      /* 4K-friendly */
+  --small-font-size: 16px;
+  --map-label-font-size: 16px;
+  --centroid-label-font-size: 20px;
+
+  --node-radius: 5.5;
+}
+
+/* -----------------------------
+   LAYOUT
+------------------------------*/
+
+body {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-family: var(--font-ui);
+  font-size: var(--base-font-size);
+  display: flex;
+  overflow: hidden; /* no scroll, keep everything in-frame */
+}
+
+#app {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+}
+
+/* Left: heatmap column */
+#heatmap-col {
+  flex: 0 0 25%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  border-right: 1px solid #ffffff; /* thin white line between map & scatter */
+  display: flex;
+  justify-content: center;  /* center scaled SVG horizontally */
+  align-items: center;      /* center scaled SVG vertically */
+}
+
+/* Zoom out the heatmap and keep it centered */
+#heatmap-col svg#vis {
+  transform: scale(0.8);
+  transform-origin: center center;
+}
+
+/* Middle: scatter column */
+#scatter-col {
+  flex: 0 0 25%;
+  height: 100%;
+  position: relative;
+  border-right: 1px solid #333;
+}
+
+/* Right: results column */
+#right {
+  flex: 0 0 50%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;      /* vertical centering of grid */
+  justify-content: center;  /* horizontal centering */
+  overflow: hidden;
+}
+
+/* Panel headings */
+.panel-heading {
+  position: absolute;
+  top: 10px;
+  left: 16px;
+  font-size: 30px;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.8);
+  z-index: 5;
+  pointer-events: none;
+  font-family: var(--font-heading);
+}
+
+/* Tooltip */
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.9);
+  color: #fff;
+  padding: 8px 10px;
+  font-size: var(--small-font-size);
+  border-radius: 4px;
+  border: 1px solid #444;
+  z-index: 10;
+  font-family: var(--font-ui);
+}
+
+/* -----------------------------
+   NODES / CENTROID (SCATTER)
+------------------------------*/
+
+.node {
+  fill: var(--node-color);
+  opacity: 1;
+}
+
+.node.highlight {
+  fill: var(--node-highlight-color);
+  opacity: 1;
+  stroke: var(--node-stroke-color);
+  stroke-width: 1.5;
+}
+
+.centroid-group circle {
+  fill: transparent;
+  stroke: var(--centroid-stroke-color);
+  stroke-width: 3.5; /* thicker */
+}
+
+.centroid-group line {
+  stroke: var(--centroid-stroke-color);
+  stroke-width: 3.5; /* thicker */
+}
+
+.centroid-label {
+  font-size: var(--centroid-label-font-size);
+  fill: var(--text-color);
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: #000;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  font-family: var(--font-heading);
+}
+
+/* Voronoi cells for scatter */
+.voronoi-cell {
+  fill: none;
+  stroke: var(--voronoi-stroke-color);
+  stroke-width: 1.4;
+  opacity: 0.3;
+}
+
+/* Axis styling (scatter) - made bigger */
+.similarity-axis path {
+  stroke: var(--axis-stroke-color);
+  stroke-width: 3; /* was ~1.8 */
+}
+
+.similarity-axis line {
+  stroke: var(--axis-stroke-color);
+  stroke-width: 2.3; /* was ~1.4 */
+}
+
+.similarity-axis text {
+  fill: var(--axis-text-color);
+  font-size: 20px;        /* bigger labels */
+  font-family: var(--font-mono);
+}
+
+/* Map labels on scatter */
+.map-label {
+  font-size: var(--map-label-font-size);
+  fill: var(--text-color);
+  paint-order: stroke;
+  stroke: #000;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
+  font-family: var(--font-ui);
+}
+
+/* Thumbnails on scatter */
+.thumb {
+  pointer-events: auto;
+  stroke: #fff;
+  stroke-width: 1.5px;
+}
+
+/* -----------------------------
+   RESULTS GRID (RIGHT COLUMN)
+------------------------------*/
+
+.results-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  /* fixed row height so grid doesn't pop when images load */
+  grid-template-rows: 320px 320px 320px;
+  gap: 24px;
+  width: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
+  align-content: center; /* center rows if there's free vertical space */
+}
+
+/* named slots */
+.slot-0 { grid-area: c0; }
+.slot-1 { grid-area: c1; }
+.slot-2 { grid-area: c2; }
+.slot-3 { grid-area: c3; }
+.slot-4 { grid-area: c4; }
+.slot-5 { grid-area: c5; }
+.slot-6 { grid-area: c6; }
+.slot-7 { grid-area: c7; }
+.slot-8 { grid-area: c8; }
+.slot-9 { grid-area: c9; }
+
+.search-slot {
+  grid-area: search;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Use explicit template areas */
+.results-grid {
+  grid-template-areas:
+    "c0 c1 c2 c3"
+    "c4 search search c5"
+    "c6 c7 c8 c9";
+}
+
+.result-slot {
+  min-height: 0;
+  /* thin black outline around each cell */
+  border: 1px solid #ffffff;
+  box-sizing: border-box;
+}
+
+/* Search input - clean, underline only, bigger font */
+#search-box {
+  width: 100%;
+  padding: 10px 4px;
+  box-sizing: border-box;
+  background: transparent;
+  border-radius: 0;
+  border: none;
+  border-bottom: 2px solid #ffffff;
+  outline: none;
+  color: var(--text-color);
+  font-size: 36px; /* bigger text input font */
+  font-family: var(--font-ui);
+}
+
+#search-box::placeholder {
+  color: #888;
+}
+
+/* Result card: no background, very light structure */
+.result-card {
+  border: none;
+  border-radius: 0;
+  padding: 4px 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.result-card-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.result-rank {
+  font-weight: 800;
+  font-size: 22px;
+  font-family: var(--font-mono);
+}
+
+.result-title {
+  font-weight: 600;
+  font-size: 22px;
+  font-family: var(--font-heading);
+}
+
+.result-card-subheader {
+  font-size: 20px;
+  font-family: var(--font-ui);
+  opacity: 0.9;
+}
+
+.result-artist {
+  font-weight: 300;
+}
+
+.result-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 18px;
+  font-family: var(--font-mono);
+  opacity: 0.9;
+}
+
+.result-meta-line {
+  white-space: nowrap;
+}
+
+/* Image wrapper to preserve aspect and avoid popping */
+.result-image-wrapper {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* fixed-ish box so layout doesn't jump,
+     tuned for 320px row height */
+  max-height: 210px;
+  min-height: 180px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.result-image {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  border: none;
+  opacity: 0;                 /* fade-in */
+  transition: opacity 0.3s ease;
+}
+
+.result-image[data-loaded="true"] {
+  opacity: 1;
+}
+
+/* -----------------------------
+   HEATMAP SVG + SHELVES
+------------------------------*/
+
+svg#vis {
+  background: var(--bg-color);
+}
+
+/* Base shape */
+.base-shape {
+  fill: none;
+  stroke: #999;
+  stroke-width: 2;
+}
+
+/* Heatmap cells + grid */
+.cell {
+  stroke: none;
+}
+
+.grid line {
+  stroke: lime;
+  stroke-width: 1.5;
+  shape-rendering: crispEdges;
+  opacity: 0.3;
+}
+
+/* Shelf rects + labels */
+.shelf-rect {
+  opacity: 1.0;
+}
+
+.shelf-label {
+  font-size: 20px;
+  fill: #000;
+  font-weight: 600;
+  font-family: var(--font-heading);
+  text-shadow: 0 0 4px rgba(255, 255, 255, 0.9);
+}
+
+/* Dynamic Voronoi for selected shelves */
+.shelf-voronoi-cell {
+  fill: none;
+  stroke: var(--shelf-voronoi-stroke);
+  stroke-width: 3; /* thicker because of zoom out */
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* Highlighted grid cell under heat centroid */
+.grid-highlight {
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+/* Heatmap centroid thicker lines */
+.heat-centroid-group circle {
+  fill: transparent;
+  stroke: var(--centroid-stroke-color);
+  stroke-width: 4; /* thicker to counter zoom */
+}
+
+.heat-centroid-group line {
+  stroke: var(--centroid-stroke-color);
+  stroke-width: 4;
+}
+
+.heat-centroid-label {
+  font-size: 22px;
+  fill: var(--text-color);
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: #000;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  font-family: var(--font-heading);
+}
+
+/* Shelf axes thicker */
+.shelf-axis path {
+  stroke: var(--axis-stroke-color);
+  stroke-width: 3;
+}
+
+.shelf-axis line {
+  stroke: var(--axis-stroke-color);
+  stroke-width: 2.4;
+}
+
+.shelf-axis text {
+  fill: var(--axis-text-color);
+  font-size: var(--small-font-size);
+  font-family: var(--font-mono);
+}

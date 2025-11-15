@@ -1,201 +1,1169 @@
 <!DOCTYPE html>
-<meta charset="utf-8">
+<html lang="en">
 <head>
-  <style>
-    body {
-      margin: 0;
-      height: 100vh;
-      display: flex;
-      justify-content: center;  /* center horizontally */
-      align-items: center;      /* center vertically */
-      background: white;
-    }
-
-    #plot {
-      border: 1px solid #444;
-    }
-
-    /* outline style when highlighted */
-    g.highlight circle.outline {
-      stroke: limegreen;
-      stroke-width: 2;
-    }
-  </style>
+  <meta charset="UTF-8" />
+  <title>Embedding & Shelf Centroid Explorer</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<svg id="plot" width="1400" height="900"></svg>
+  <div id="app">
+    <!-- LEFT: HEATMAP / SHELVES -->
+    <div id="heatmap-col">
+      <div class="panel-heading">Shelves / Heatmap</div>
+      <!-- scene.svg will be injected here -->
+    </div>
 
-<script src="https://d3js.org/d3.v7.min.js"></script>
-<script>
-const svg = d3.select("#plot");
-const width = +svg.attr("width");
-const height = +svg.attr("height");
+    <!-- MIDDLE: SCATTER MAP -->
+    <div id="scatter-col">
+      <div class="panel-heading">Embedding Map</div>
+      <svg id="viz"></svg>
+      <div id="tooltip" class="tooltip" style="display:none;"></div>
+    </div>
 
-// how many nearest neighbours per node to connect
-const K = 10;
-const EMB_SIZE = 512; // emb_0 ... emb_511
+    <!-- RIGHT: RESULTS + SEARCH GRID -->
+    <div id="right">
+      <div id="results-grid" class="results-grid">
+        <!-- Row 1: 4 items -->
+        <div class="result-slot slot-0" data-slot="0"></div>
+        <div class="result-slot slot-1" data-slot="1"></div>
+        <div class="result-slot slot-2" data-slot="2"></div>
+        <div class="result-slot slot-3" data-slot="3"></div>
 
-// helper: extract image path from "image@file://./images/xxx.jpg"
-function parseImagePath(d) {
-  let str = d.thumbnail;
-  if (!str) return null;
+        <!-- Row 2: 1 item, search (span 2), 1 item -->
+        <div class="result-slot slot-4" data-slot="4"></div>
+        <div class="result-slot search-slot">
+          <input id="search-box" type="text" placeholder="Type to search (live)..." />
+        </div>
+        <div class="result-slot slot-5" data-slot="5"></div>
 
-  // Replace "/images/" with "/thumbnails/"
-  let uri = str.replace(/\/images\//, "/thumbnails/");
+        <!-- Row 3: 4 items -->
+        <div class="result-slot slot-6" data-slot="6"></div>
+        <div class="result-slot slot-7" data-slot="7"></div>
+        <div class="result-slot slot-8" data-slot="8"></div>
+        <div class="result-slot slot-9" data-slot="9"></div>
+      </div>
+    </div>
+  </div>
 
-  // Replace extension with ".png"
-  uri = uri.replace(/\.[^.]+$/, ".png");
+  <script>
+    // ----------------------------
+    // CONFIGURATION
+    // ----------------------------
+    const CONFIG = {
+      apiBase: "http://localhost:8000",   // Backend base URL
+      thumbSize: 60,                      // Thumbnail size in px for map (4K)
+      debounceMs: 50,                     // Search debounce
+      projectionForceStrength: 0.25,      // Force towards t-SNE / UMAP anchor
+      chargeStrength: -1,                 // Node repulsion
+      centroidRepelStrength: 5000,        // Global repulsion from centroid
+      centroidSmoothing: 0.1,             // How fast centroid moves towards target
+      alphaMin: 0.001,
+      alphaDecay: 0.002,
+      lacunarityLambda: 0.5,              // Rank decay for centroid weighting
+      voronoiSubsampleTicks: 1,           // Recompute Voronoi for selection
+    };
 
-  return uri;
-}
+    const totalWidth  = window.innerWidth;
+    const totalHeight = window.innerHeight;
 
-// helper: squared distance in embedding space
-function embeddingDistanceSquared(a, b) {
-  let sum = 0;
-  const ea = a.emb;
-  const eb = b.emb;
-  for (let i = 0; i < EMB_SIZE; i++) {
-    const diff = ea[i] - eb[i];
-    sum += diff * diff;
-  }
-  return sum;
-}
+    const scatterWidth  = totalWidth * 0.25;
+    const heatmapWidth  = totalWidth * 0.25;
+    const scatterHeight = totalHeight;
+    const heatmapHeight = totalHeight;
 
-d3.csv("data.csv", d => {
-  // parse embedding vector
-  const emb = new Array(EMB_SIZE);
-  for (let i = 0; i < EMB_SIZE; i++) {
-    emb[i] = +d[`emb_${i}`];
-  }
+    const margin = 40;
 
-  return {
-    artwork_id: d.artwork_id,
-    x: +d.umap_x,
-    y: +d.umap_y,
-    cluster: +d.cluster,       // ⬅️ read cluster as integer
-    img: parseImagePath(d),
-    emb: emb
-  };
-}).then(data => {
+    // ----------------------------
+    // SCATTER: SVG + LAYERS
+    // ----------------------------
+    const svg = d3.select("#viz")
+      .attr("width", scatterWidth)
+      .attr("height", scatterHeight)
+      .style("background", getComputedStyle(document.documentElement)
+        .getPropertyValue("--bg-color"));
 
-  // scales from UMAP to screen (still used just for positioning)
-  const xScale = d3.scaleLinear()
-      .domain(d3.extent(data, d => d.x))
-      .range([60, width - 60]);   // a bit more padding
+    const tooltip     = d3.select("#tooltip");
+    const resultsGrid = d3.select("#results-grid");
+    const searchBox   = document.getElementById("search-box");
 
-  const yScale = d3.scaleLinear()
-      .domain(d3.extent(data, d => d.y))
-      .range([height - 60, 60]);
+    const voronoiLayer  = svg.append("g").attr("id", "voronoi");
+    const axesLayer     = svg.append("g").attr("id", "axes-layer");
+    const nodeLayer     = svg.append("g").attr("id", "nodes");
+    const thumbLayer    = svg.append("g").attr("id", "thumbnails");
+    const labelLayer    = svg.append("g").attr("id", "map-labels");
+    const centroidLayer = svg.append("g").attr("id", "centroid");
 
-  // base screen positions + random phase for each node (for wobble)
-  data.forEach(d => {
-    d.x0 = xScale(d.x);
-    d.y0 = yScale(d.y);
-    d.phase = Math.random() * 2 * Math.PI;
-    d.xAnim = d.x0;
-    d.yAnim = d.y0;
-    d.hasImage = !!d.img;
-  });
+    let nodes = [];
+    let nodesById = new Map();
+    let nodeSel;
+    let xScale, yScale;
 
-  // --------- build edges between close nodes (KNN in EMBEDDING space) ----------
-  const edges = [];
-  data.forEach((d, i) => {
-    const distances = data.map((e, j) =>
-      i === j ? Infinity : embeddingDistanceSquared(d, e)
+    let centroid = null;          // scatter centroid position {x, y}
+    let centroidTarget = null;    // scatter centroid target {x, y}
+    let selectedIds = new Set();
+    let axisDataGlobal = [];      // [{id, score}]
+    let tickCount = 0;
+    let simulation;
+
+    // point metadata + shelf mapping
+    let pointsMeta = [];
+    let pointShelfById = new Map(); // id -> shelf_id (number or null)
+
+    // ----------------------------
+    // SCATTER: CENTROID VISUALS
+    // ----------------------------
+    const centroidGroup = centroidLayer.append("g")
+      .attr("class", "centroid-group")
+      .style("display", "none");
+
+    const centroidCircleRadius = parseFloat(
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--centroid-circle-radius")
     );
 
-    const neighbors = d3.range(data.length)
-      .sort((a, b) => distances[a] - distances[b])
-      .slice(0, K);
+    centroidGroup.append("circle")
+      .attr("r", centroidCircleRadius);
 
-    neighbors.forEach(j => {
-      edges.push({ source: data[i], target: data[j] });
+    const centroidLineHalfLength = parseFloat(
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--centroid-line-half-length")
+    );
+
+    centroidGroup.append("line")
+      .attr("x1", -centroidLineHalfLength).attr("y1", 0)
+      .attr("x2",  centroidLineHalfLength).attr("y2", 0);
+
+    centroidGroup.append("line")
+      .attr("x1", 0).attr("y1", -centroidLineHalfLength)
+      .attr("x2", 0).attr("y2",  centroidLineHalfLength);
+
+    const centroidLabel = centroidLayer.append("text")
+      .attr("class", "centroid-label")
+      .style("display", "none");
+
+    // ----------------------------
+    // SCATTER FORCES
+    // ----------------------------
+    function centroidRepel(strength = CONFIG.centroidRepelStrength) {
+      let nodesLocal;
+      function force(alpha) {
+        if (!centroid) return;
+        const cx = centroid.x;
+        const cy = centroid.y;
+
+        for (const n of nodesLocal) {
+          if (selectedIds.has(n.id)) continue; // selected ones are not repelled
+
+          const dx = n.x - cx;
+          const dy = n.y - cy;
+          const dist2 = dx * dx + dy * dy;
+          if (!dist2) continue;
+
+          const dist = Math.sqrt(dist2);
+          const f = (strength * alpha) / (dist + 1e-6);
+
+          n.vx += (dx / dist) * f;
+          n.vy += (dy / dist) * f;
+        }
+      }
+      force.initialize = function(_nodes) {
+        nodesLocal = _nodes;
+      };
+      return force;
+    }
+
+    // ----------------------------
+    // UTILS
+    // ----------------------------
+    function debounce(fn, delay) {
+      let t = null;
+      return function (...args) {
+        if (t) clearTimeout(t);
+        t = setTimeout(() => fn.apply(this, args), delay);
+      };
+    }
+
+    function formatShelf(shelf) {
+      if (shelf === null || shelf === undefined) return "–";
+      const num = Number(shelf);
+      if (Number.isNaN(num)) return String(shelf);
+      return String(num).padStart(2, "0");
+    }
+
+    // ----------------------------
+    // DATA FETCHING (POINTS)
+    // ----------------------------
+    fetch(`${CONFIG.apiBase}/api/points`)
+      .then(res => res.json())
+      .then(data => {
+        pointsMeta = data;
+
+        xScale = d3.scaleLinear().domain([0, 1]).range([margin, scatterWidth - margin]);
+        yScale = d3.scaleLinear().domain([0, 1]).range([scatterHeight - margin, margin]);
+
+        nodes = data.map(d => {
+          const shelf = (d.shelf_id === null || d.shelf_id === undefined)
+            ? null
+            : d.shelf_id;
+          pointShelfById.set(d.id, shelf);
+
+          return {
+            id: d.id,
+            title: d.title,
+            artist: d.artist || "",
+            thumb: d.thumb,
+            shelf_id: shelf,
+            x0: xScale(d.x),
+            y0: yScale(d.y),
+            x:  xScale(d.x),
+            y:  yScale(d.y),
+          };
+        });
+
+        nodesById = new Map(nodes.map(n => [n.id, n]));
+
+        drawNodes();
+        buildSimulation();
+      });
+
+    // ----------------------------
+    // SCATTER: DRAW NODES
+    // ----------------------------
+    function drawNodes() {
+      const nodeRadius = parseFloat(
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--node-radius")
+      );
+
+      nodeSel = nodeLayer.selectAll("circle.node")
+        .data(nodes, d => d.id)
+        .join("circle")
+        .attr("class", "node")
+        .attr("r", nodeRadius)
+        .attr("cx", d => d.x)
+        .attr("cy", d => d.y)
+        .on("mouseover", (event, d) => {
+          tooltip
+            .style("display", "block")
+            .style("left", (event.clientX + 12) + "px")
+            .style("top", (event.clientY + 12) + "px")
+            .html(`<b>${d.title}</b><br/>${d.artist ? d.artist + "<br/>" : ""}id: ${d.id}`);
+        })
+        .on("mouseout", () => {
+          tooltip.style("display", "none");
+        });
+    }
+
+    // ----------------------------
+    // SCATTER: SIMULATION
+    // ----------------------------
+    function buildSimulation() {
+      simulation = d3.forceSimulation(nodes)
+        .force("x", d3.forceX(d => d.x0).strength(CONFIG.projectionForceStrength))
+        .force("y", d3.forceY(d => d.y0).strength(CONFIG.projectionForceStrength))
+        .force("charge", d3.forceManyBody().strength(CONFIG.chargeStrength))
+        .force("centroidRepel", centroidRepel(CONFIG.centroidRepelStrength))
+        .alphaMin(CONFIG.alphaMin)
+        .alphaDecay(CONFIG.alphaDecay)
+        .on("tick", ticked);
+    }
+
+    function ticked() {
+      tickCount++;
+
+      // Smoothly move centroid toward target
+      if (centroid && centroidTarget) {
+        const a = CONFIG.centroidSmoothing;
+        centroid.x += (centroidTarget.x - centroid.x) * a;
+        centroid.y += (centroidTarget.y - centroid.y) * a;
+      }
+
+      nodeSel
+        .attr("cx", d => d.x)
+        .attr("cy", d => d.y);
+
+      // Update thumbnails
+      thumbLayer.selectAll("image.thumb")
+        .attr("x", d => d.x - CONFIG.thumbSize / 2)
+        .attr("y", d => d.y - CONFIG.thumbSize / 2);
+
+      // Update labels
+      labelLayer.selectAll("text.map-label")
+        .attr("x", d => d.x + CONFIG.thumbSize / 2 + 8)
+        .attr("y", d => d.y + 3);
+
+      if (centroid) {
+        centroidGroup
+          .attr("transform", `translate(${centroid.x},${centroid.y})`);
+
+        centroidLabel
+          .attr("x", centroid.x + 14)
+          .attr("y", centroid.y - 14);
+      }
+
+      drawAxes();
+
+      if (tickCount % CONFIG.voronoiSubsampleTicks === 0) {
+        drawVoronoi();
+      }
+    }
+
+    // ----------------------------
+    // SCATTER: VORONOI (ONLY SELECTED)
+    // ----------------------------
+    function drawVoronoi() {
+      const selectedNodes = nodes.filter(n => selectedIds.has(n.id));
+
+      if (!selectedNodes.length) {
+        voronoiLayer.selectAll("path.voronoi-cell").remove();
+        return;
+      }
+
+      const delaunay = d3.Delaunay.from(
+        selectedNodes,
+        d => d.x,
+        d => d.y
+      );
+      const voronoi = delaunay.voronoi([0, 0, scatterWidth, scatterHeight]);
+
+      const paths = [];
+      for (let i = 0; i < selectedNodes.length; i++) {
+        const cell = voronoi.cellPolygon(i);
+        if (cell) {
+          paths.push({ id: selectedNodes[i].id, path: cell });
+        }
+      }
+
+      voronoiLayer
+        .selectAll("path.voronoi-cell")
+        .data(paths, d => d.id)
+        .join("path")
+        .attr("class", "voronoi-cell")
+        .attr("d", d => "M" + d.path.join("L") + "Z");
+    }
+
+    // ----------------------------
+    // SCATTER: AXES FROM CENTROID
+    // ----------------------------
+    function drawAxes() {
+      if (!centroid || !axisDataGlobal.length) {
+        axesLayer.selectAll("g.similarity-axis").remove();
+        return;
+      }
+
+      const axes = axesLayer.selectAll("g.similarity-axis")
+        .data(axisDataGlobal, d => d.id);
+
+      axes.exit().remove();
+
+      const axesEnter = axes.enter()
+        .append("g")
+        .attr("class", "similarity-axis");
+
+      const axesMerged = axesEnter.merge(axes);
+
+      axesMerged.each(function(d) {
+        const node = nodesById.get(d.id);
+        if (!node) {
+          d3.select(this).style("display", "none");
+          return;
+        }
+        const cx = centroid.x;
+        const cy = centroid.y;
+        const dx = node.x - cx;
+        const dy = node.y - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist <= 0) {
+          d3.select(this).style("display", "none");
+          return;
+        }
+
+        const angleRad = Math.atan2(dy, dx);
+        const angleDeg = angleRad * 180 / Math.PI;
+
+        const scale = d3.scaleLinear()
+          .domain([0, dist])
+          .range([0, dist]);
+
+        const axis = d3.axisBottom(scale)
+          .ticks(3)
+          .tickFormat(v => (v === 0 ? "" : v.toFixed(1)));
+
+        const g = d3.select(this)
+          .attr("transform", `translate(${cx},${cy}) rotate(${angleDeg})`)
+          .call(axis);
+
+        g.selectAll(".tick text")
+          .style("opacity", t => t === 0 ? 0 : 1);
+        g.selectAll(".tick line")
+          .style("opacity", t => t === 0 ? 0 : 1);
+      });
+    }
+
+    // ----------------------------
+    // SEARCH HANDLING
+    // ----------------------------
+    const handleSearch = debounce(function () {
+      const q = searchBox.value.trim();
+      if (!q) {
+        resetVisualization();
+        return;
+      }
+
+      fetch(`${CONFIG.apiBase}/api/search?q=` + encodeURIComponent(q))
+        .then(res => res.json())
+        .then(data => {
+          const results = data.results || [];
+          applyCentroidLogic(q, results);
+          applyShelfCentroidLogic(q, results);  // shelf centroid update
+          renderResults(results);               // fills slots, search stays
+        });
+    }, CONFIG.debounceMs);
+
+    searchBox.addEventListener("input", handleSearch);
+
+    function resetVisualization() {
+      selectedIds = new Set();
+      centroid = null;
+      centroidTarget = null;
+      axisDataGlobal = [];
+
+      nodeSel
+        .classed("highlight", false)
+        .style("display", "block"); // show all circles again
+
+      centroidGroup.style("display", "none");
+      centroidLabel.style("display", "none").text("");
+
+      axesLayer.selectAll("*").remove();
+      voronoiLayer.selectAll("*").remove();
+      thumbLayer.selectAll("*").remove();
+      labelLayer.selectAll("*").remove();
+
+      resetShelfCentroid();
+
+      if (simulation) {
+        simulation.alpha(0.3).restart();
+      }
+
+      // keep search, clear cards
+      renderResults([]);
+    }
+
+    // ----------------------------
+    // SCATTER: CENTROID + THUMBS + LABELS
+    // ----------------------------
+    function applyCentroidLogic(queryText, results) {
+      selectedIds = new Set(results.map(r => r.id));
+
+      // highlight & hide circles where selected (since we show thumbnails there)
+      nodeSel
+        .classed("highlight", d => selectedIds.has(d.id))
+        .style("display", d => selectedIds.has(d.id) ? "none" : "block");
+
+      if (results.length === 0) {
+        resetVisualization();
+        return;
+      }
+
+      const lambda = CONFIG.lacunarityLambda;
+      const scoreById = new Map(results.map(r => [r.id, r.score]));
+      const weightById = new Map();
+
+      results.forEach((r, idx) => {
+        const baseScore = r.score ?? 0;
+        const rankFactor = Math.pow(lambda, idx);
+        const w = baseScore * rankFactor;
+        weightById.set(r.id, w);
+      });
+
+      let sumW = 0, sumX = 0, sumY = 0;
+      const resultNodes = [];
+
+      for (const r of results) {
+        const n = nodesById.get(r.id);
+        if (!n) continue;
+        resultNodes.push(n);
+        const w = weightById.get(r.id) ?? 0;
+        sumW += w;
+        sumX += w * n.x;
+        sumY += w * n.y;
+      }
+
+      if (resultNodes.length === 0) {
+        resetVisualization();
+        return;
+      }
+
+      if (sumW === 0) {
+        sumW = resultNodes.length;
+        sumX = 0;
+        sumY = 0;
+        for (const n of resultNodes) {
+          sumX += n.x;
+          sumY += n.y;
+        }
+      }
+
+      const newTarget = {
+        x: sumX / sumW,
+        y: sumY / sumW,
+      };
+
+      if (!centroid) {
+        centroid = { ...newTarget };
+      }
+      centroidTarget = newTarget;
+
+      centroidGroup
+        .style("display", "block")
+        .attr("transform", `translate(${centroid.x},${centroid.y})`);
+
+      centroidLabel
+        .style("display", "block")
+        .text(queryText)
+        .attr("x", centroid.x + 14)
+        .attr("y", centroid.y - 14);
+
+      // Axis data (raw similarity)
+      axisDataGlobal = resultNodes.map(n => ({
+        id: n.id,
+        score: scoreById.get(n.id) ?? 0.0,
+      }));
+
+      // --- THUMBNAILS + LABELS FOR SELECTED NODES ---
+      const thumbs = thumbLayer.selectAll("image.thumb")
+        .data(resultNodes, d => d.id);
+
+      thumbs.exit().remove();
+
+      thumbs.enter()
+        .append("image")
+        .attr("class", "thumb")
+        .attr("width", CONFIG.thumbSize)
+        .attr("height", CONFIG.thumbSize)
+        .attr("href", d => d.thumb)
+        .attr("preserveAspectRatio", "xMidYMid slice")
+        .merge(thumbs)
+        .attr("x", d => d.x - CONFIG.thumbSize / 2)
+        .attr("y", d => d.y - CONFIG.thumbSize / 2);
+
+      const labels = labelLayer.selectAll("text.map-label")
+        .data(resultNodes, d => d.id);
+
+      labels.exit().remove();
+
+      labels.enter()
+        .append("text")
+        .attr("class", "map-label")
+        .merge(labels)
+        .text(d => {
+          const artist = d.artist ? ` — ${d.artist}` : "";
+          return `${d.title}${artist}`;
+        })
+        .attr("x", d => d.x + CONFIG.thumbSize / 2 + 8)
+        .attr("y", d => d.y + 3);
+
+      simulation.alpha(0.8).restart();
+    }
+
+    // ----------------------------
+    // RESULTS PANEL (GRID SLOTS, FULL IMAGES)
+    // ----------------------------
+    function renderResults(results) {
+      // 10 slots max
+      const maxSlots = 10;
+      for (let i = 0; i < maxSlots; i++) {
+        const slot = document.querySelector(`.result-slot.slot-${i}`);
+        if (!slot) continue;
+        const r = results[i];
+        if (!r) {
+          slot.innerHTML = "";
+          continue;
+        }
+        const shelf = r.shelf_id ?? pointShelfById.get(r.id);
+        slot.innerHTML = `
+          <div class="result-card">
+            <div class="result-card-header">
+              <span class="result-rank">${i + 1}.</span>
+              <span class="result-title">${r.title}</span>
+            </div>
+            <div class="result-card-subheader">
+              ${r.artist ? `<span class="result-artist">${r.artist}</span>` : ""}
+            </div>
+            <div class="result-meta">
+              <span class="result-meta-line">ID: ${r.id}</span>
+              <span class="result-meta-line">score: ${r.score.toFixed(4)}</span>
+              <span class="result-meta-line">Shelf: ${formatShelf(shelf)}</span>
+            </div>
+            <div class="result-image-wrapper">
+              <img src="${r.image}" class="result-image" onload="this.dataset.loaded='true'" />
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    // =====================================================
+    // HEATMAP / SHELVES (LEFT COLUMN)
+    // =====================================================
+
+    let heatmapReady = false;
+
+    let shelfDefs = [];             // [{shelf_id, x, y, w, h}]
+    let heatCentroid = null;        // {x, y} in heatmap local coords (eased)
+    let heatCentroidTarget = null;  // {x, y} (no easing, used for highlighted cell)
+    let shelfAxisData = [];         // [{shelf_id, x, y, weight}]
+    let heatAnimating = false;
+
+    let heatAxesLayer = null;
+    let heatCentroidGroup = null;
+    let heatCentroidLabel = null;
+    let shelfRectSelection = null;
+    let gridHighlightRect = null;
+    let selectedShelves = new Set();
+    let shelfVoronoiLayer = null;
+
+    function resetShelfCentroid() {
+      heatCentroid = null;
+      heatCentroidTarget = null;
+      shelfAxisData = [];
+      selectedShelves = new Set();
+
+      if (heatAxesLayer) {
+        heatAxesLayer.selectAll("*").remove();
+      }
+      if (heatCentroidGroup) {
+        heatCentroidGroup.style("display", "none");
+      }
+      if (heatCentroidLabel) {
+        heatCentroidLabel.style("display", "none").text("");
+      }
+      if (gridHighlightRect) {
+        gridHighlightRect.style("opacity", 0);
+      }
+      if (shelfVoronoiLayer) {
+        shelfVoronoiLayer.selectAll("*").remove();
+      }
+
+      updateShelfRects();
+    }
+
+    function updateShelfRects() {
+      if (!shelfRectSelection) return;
+      shelfRectSelection
+        .transition().duration(250)
+        .attr("fill", d => selectedShelves.has(d.id) ? "lime" : "#ffffff")
+        .attr("stroke", d => selectedShelves.has(d.id) ? "lime" : "#ffffff");
+    }
+
+    // highlight cell using *target* centroid (no easing)
+    function updateGridHighlight(cellWidth, cellHeight, nCols, nRows) {
+      const pos = heatCentroidTarget || heatCentroid;
+      if (!pos) {
+        if (gridHighlightRect) {
+          gridHighlightRect.style("opacity", 0);
+        }
+        return;
+      }
+
+      const col = Math.floor(pos.x / cellWidth);
+      const row = Math.floor(pos.y / cellHeight);
+
+      if (col < 0 || col >= nCols || row < 0 || row >= nRows) {
+        if (gridHighlightRect) {
+          gridHighlightRect.style("opacity", 0);
+        }
+        return;
+      }
+
+      const x = col * cellWidth;
+      const y = row * cellHeight;
+
+      if (!gridHighlightRect) {
+        gridHighlightRect = d3.select(".heatmap-layer")
+          .append("rect")
+          .attr("class", "grid-highlight")
+          .attr("x", x)
+          .attr("y", y)
+          .attr("width", cellWidth)
+          .attr("height", cellHeight)
+          .style("fill", "lime")
+          .style("opacity", 0.45);
+      } else {
+        gridHighlightRect
+          .attr("x", x)
+          .attr("y", y)
+          .attr("width", cellWidth)
+          .attr("height", cellHeight)
+          .style("opacity", 0.45);
+      }
+    }
+
+    function drawShelfVoronoi(voronoiPoints, widthLocal, heightLocal) {
+      if (!shelfVoronoiLayer) return;
+
+      const selectedPoints = voronoiPoints.filter(p => selectedShelves.has(p.id));
+      if (!selectedPoints.length) {
+        shelfVoronoiLayer.selectAll("path.shelf-voronoi-cell").remove();
+        return;
+      }
+
+      const delaunay = d3.Delaunay.from(
+        selectedPoints,
+        d => d.x,
+        d => d.y
+      );
+      const voronoi = delaunay.voronoi([0, 0, widthLocal, heightLocal]);
+
+      const cells = [];
+      for (let i = 0; i < selectedPoints.length; i++) {
+        const poly = voronoi.cellPolygon(i);
+        if (poly) {
+          cells.push({ id: selectedPoints[i].id, path: poly });
+        }
+      }
+
+      shelfVoronoiLayer
+        .selectAll("path.shelf-voronoi-cell")
+        .data(cells, d => d.id)
+        .join("path")
+        .attr("class", "shelf-voronoi-cell")
+        .attr("d", d => "M" + d.path.join("L") + "Z");
+    }
+
+    // Load external SVG for the heatmap scene
+    d3.xml("scene.svg").then(function (xml) {
+      const importedNode = document.importNode(xml.documentElement, true);
+      document.getElementById("heatmap-col").appendChild(importedNode);
+
+      const svgHeat = d3.select("#vis")
+        .attr("width", heatmapWidth)
+        .attr("height", heatmapHeight)
+        .style("background", getComputedStyle(document.documentElement)
+          .getPropertyValue("--bg-color"));
+
+      const svgNode = svgHeat.node();
+
+      const rootG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      rootG.setAttribute("class", "scene-root");
+
+      while (svgNode.firstChild) {
+        rootG.appendChild(svgNode.firstChild);
+      }
+      svgNode.appendChild(rootG);
+
+      const sceneRoot = d3.select(rootG);
+
+      const rectCenterX = 1932.9 - 98;
+      const rectCenterY = 2417.3 - 830;
+      const baseRectAngle = -71.3;
+      const rectAngle = baseRectAngle;
+      const rectSize = 2187.5 * 1.1;
+
+      const baseG = sceneRoot.append("g").attr("class", "base-layer");
+
+      baseG.append("rect")
+        .attr("class", "base-shape")
+        .attr("x", rectCenterX - rectSize / 2)
+        .attr("y", rectCenterY - rectSize / 2)
+        .attr("width", rectSize)
+        .attr("height", rectSize)
+        .attr("transform", `rotate(${rectAngle}, ${rectCenterX}, ${rectCenterY})`)
+        .attr("opacity", 0.0);
+
+      const nCols = 110;
+      const nRows = 110;
+
+      const cellWidth = rectSize / nCols;
+      const cellHeight = rectSize / nRows;
+
+      const widthLocal = nCols * cellWidth;
+      const heightLocal = nRows * cellHeight;
+
+      const anchorX = rectCenterX;
+      const anchorY = rectCenterY;
+      const angle = rectAngle;
+
+      const heatmapG = sceneRoot.append("g")
+        .attr("class", "heatmap-layer")
+        .attr(
+          "transform",
+          `
+            translate(${anchorX}, ${anchorY})
+            rotate(${angle})
+            translate(${-widthLocal / 2}, ${-heightLocal / 2})
+          `
+        );
+
+      const gridG = heatmapG.append("g").attr("class", "grid");
+
+      for (let c = 0; c <= nCols; c++) {
+        gridG.append("line")
+          .attr("x1", c * cellWidth)
+          .attr("y1", 0)
+          .attr("x2", c * cellWidth)
+          .attr("y2", heightLocal);
+      }
+
+      for (let r = 0; r <= nRows; r++) {
+        gridG.append("line")
+          .attr("x1", 0)
+          .attr("y1", r * cellHeight)
+          .attr("x2", widthLocal)
+          .attr("y2", r * cellHeight);
+      }
+
+      const voronoiPoints = [
+        { id: 0, x: 23.5 * cellWidth,  y: 78 * cellHeight, w: 11 * cellWidth, h: 30 * cellHeight },
+        { id: 1, x: 84  * cellWidth,  y: 45 * cellHeight, w: 4  * cellWidth, h: 12 * cellHeight },
+        { id: 2, x: 54  * cellWidth,  y: 73 * cellHeight, w: 8  * cellWidth, h: 4  * cellHeight },
+        { id: 3, x: 66  * cellWidth,  y: 66 * cellHeight, w: 4  * cellWidth, h: 8  * cellHeight },
+        { id: 4, x: 64  * cellWidth,  y: 58 * cellHeight, w: 8  * cellWidth, h: 8  * cellHeight },
+        { id: 5, x: 103 * cellWidth,  y: 59 * cellHeight, w: 8  * cellWidth, h: 8 * cellHeight },
+        { id: 6, x: 52  * cellWidth,  y: 79 * cellHeight, w: 4  * cellWidth, h: 8  * cellHeight },
+        { id: 7, x: 46  * cellWidth,  y: 85 * cellHeight, w: 8  * cellWidth, h: 4  * cellHeight },
+        { id: 8, x: 4   * cellWidth,  y: 69 * cellHeight, w: 4  * cellWidth, h: 16 * cellHeight },
+        { id: 9, x: 101 * cellWidth,  y: 33 * cellHeight, w: 16 * cellWidth, h: 4 * cellHeight },
+      ];
+
+      shelfDefs = voronoiPoints.map(p => ({
+        shelf_id: p.id,
+        x: p.x,
+        y: p.y,
+        w: p.w,
+        h: p.h,
+      }));
+
+      const img = new Image();
+      img.src = "heatmap2.png";
+
+      img.onload = function () {
+        const canvas = document.createElement("canvas");
+        canvas.width = nCols;
+        canvas.height = nRows;
+        const ctx = canvas.getContext("2d");
+
+        ctx.drawImage(img, 0, 0, nCols, nRows);
+
+        const imgData = ctx.getImageData(0, 0, nCols, nRows).data;
+
+        const dataCells = [];
+        for (let r = 0; r < nRows; r++) {
+          for (let c = 0; c < nCols; c++) {
+            const idx = (r * nCols + c) * 4;
+            const R = imgData[idx];
+            const G = imgData[idx + 1];
+            const B = imgData[idx + 2];
+            const gray = (R + G + B) / 3;
+            const value = 1 - gray / 255;
+            dataCells.push({ row: r, col: c, value });
+          }
+        }
+
+        heatmapG.selectAll("rect.cell")
+          .data(dataCells)
+          .enter()
+          .append("rect")
+          .attr("class", "cell")
+          .attr("x", d => d.col * cellWidth)
+          .attr("y", d => d.row * cellHeight)
+          .attr("width", cellWidth)
+          .attr("height", cellHeight)
+          .attr("fill", d => d.value === 0 ? "none" : "white")
+          .attr("opacity", 1.0);
+
+        const voronoiG = heatmapG.append("g")
+          .attr("class", "voronoi-layer");
+
+        // Shelves as rects with data binding (start white)
+        shelfRectSelection = voronoiG.selectAll("rect.shelf-rect")
+          .data(voronoiPoints, d => d.id)
+          .enter()
+          .append("rect")
+          .attr("class", "shelf-rect")
+          .attr("x", p => p.x - p.w / 2)
+          .attr("y", p => p.y - p.h / 2)
+          .attr("width", p => p.w)
+          .attr("height", p => p.h)
+          .attr("stroke", "#ffffff")
+          .attr("stroke-width", 3)
+          .attr("fill", "#ffffff")
+          .attr("opacity", 1.0);
+
+        // Shelf labels (double digits, bigger)
+        voronoiG.selectAll("text.shelf-label")
+          .data(voronoiPoints, d => d.id)
+          .enter()
+          .append("text")
+          .attr("class", "shelf-label")
+          .attr("x", d => d.x)
+          .attr("y", d => d.y)
+          .attr("dy", "0.35em")
+          .attr("text-anchor", "middle")
+          .text(d => String(d.id).padStart(2, "0"));
+
+        // Dynamic Voronoi for selected shelves
+        shelfVoronoiLayer = voronoiG.append("g")
+          .attr("class", "shelf-voronoi-layer");
+
+        // Rotate entire sceneRoot to final orientation
+        sceneRoot.attr("transform", null);
+        const bbox = rootG.getBBox();
+        const cx = bbox.x + bbox.width / 2;
+        const cy = bbox.y + bbox.height / 2;
+
+        sceneRoot.attr("transform", `rotate(251.3 ${cx} ${cy})`);
+        const rbbox = rootG.getBBox();
+        const dx = -rbbox.x;
+        const dy = -rbbox.y;
+        sceneRoot.attr("transform", `translate(${dx} ${dy}) rotate(251.3 ${cx} ${cy})`);
+
+        // Shelf centroid + axes
+        heatAxesLayer = heatmapG.append("g").attr("class", "shelf-axes-layer");
+
+        heatCentroidGroup = heatmapG.append("g")
+          .attr("class", "heat-centroid-group")
+          .style("display", "none");
+
+        const cR = centroidCircleRadius;
+        heatCentroidGroup.append("circle")
+          .attr("r", cR);
+
+        heatCentroidGroup.append("line")
+          .attr("x1", -centroidLineHalfLength)
+          .attr("y1", 0)
+          .attr("x2",  centroidLineHalfLength)
+          .attr("y2", 0);
+
+        heatCentroidGroup.append("line")
+          .attr("x1", 0)
+          .attr("y1", -centroidLineHalfLength)
+          .attr("x2", 0)
+          .attr("y2",  centroidLineHalfLength);
+
+        heatCentroidLabel = heatmapG.append("text")
+          .attr("class", "heat-centroid-label")
+          .style("display", "none");
+
+        heatmapReady = true;
+
+        // keep references for grid highlight updates
+        heatmapG.node().__cellWidth__ = cellWidth;
+        heatmapG.node().__cellHeight__ = cellHeight;
+        heatmapG.node().__nCols__ = nCols;
+        heatmapG.node().__nRows__ = nRows;
+        heatmapG.node().__voronoiPoints__ = voronoiPoints;
+        heatmapG.node().__widthLocal__ = widthLocal;
+        heatmapG.node().__heightLocal__ = heightLocal;
+      };
+
+      img.onerror = function (e) {
+        console.error("Could not load heatmap image:", e);
+      };
     });
-  });
 
-  // --------- draw edges ----------
-  const lines = svg.append("g")
-    .attr("stroke", "#aaa")
-    .attr("opacity", 0.3)
-    .attr("stroke-width", 0.5)
-    .selectAll("line")
-    .data(edges)
-    .enter()
-    .append("line");
+    // ----------------------------
+    // SHELF CENTROID + AXES
+    // ----------------------------
+    function applyShelfCentroidLogic(queryText, results) {
+      if (!heatmapReady || !shelfDefs.length) return;
 
-  // --------- node groups (image + circle fallback + outline) ----------
-  const thumbSize = 18; // px
-  const outlineRadius = thumbSize / 2 + 3;
+      if (!results.length) {
+        resetShelfCentroid();
+        return;
+      }
 
-  const nodeGroups = svg.append("g")
-    .selectAll("g")
-    .data(data)
-    .enter()
-    .append("g");
+      const lambda = CONFIG.lacunarityLambda;
+      const shelfWeights = new Map(); // shelf_id -> weight
+      const shelfCenters = new Map(); // shelf_id -> {x,y}
 
-  // outline circle for highlighting (initially invisible)
-  nodeGroups
-    .append("circle")
-    .attr("class", "outline")
-    .attr("r", outlineRadius)
-    .attr("fill", "none")
-    .attr("stroke", "none");
+      shelfDefs.forEach(sd => {
+        shelfCenters.set(sd.shelf_id, { x: sd.x, y: sd.y });
+      });
 
-  // fallback circle (visible only when no image)
-  nodeGroups
-    .append("circle")
-    .attr("class", "fallback")
-    .attr("r", d => d.hasImage ? 0 : 3)
-    .attr("fill", "black");
+      results.forEach((r, idx) => {
+        const baseScore = r.score ?? 0;
+        const rankFactor = Math.pow(lambda, idx);
+        const w = baseScore * rankFactor;
 
-  // images (only if we have a path)
-  nodeGroups
-    .filter(d => d.img)
-    .append("image")
-    .attr("width", thumbSize)
-    .attr("height", thumbSize)
-    .attr("x", -thumbSize / 2)
-    .attr("y", -thumbSize / 2)
-    .attr("href", d => d.img)
-    .attr("preserveAspectRatio", "xMidYMid slice")
-    .on("error", function(event, d) {
-      d.hasImage = false;
-      d3.select(this).remove();
-      d3.select(this.parentNode).select("circle.fallback")
-        .attr("r", 3);
-    });
+        const shelf = pointShelfById.get(r.id);
+        if (shelf === null || shelf === undefined) return;
+        if (!shelfCenters.has(shelf)) return;
 
-  // --------- hover: highlight all nodes with same cluster ----------
-  nodeGroups
-    .on("mouseover", function(event, d) {
-      const c = d.cluster;
-      // raise current group to front
-      d3.select(this).raise();
-      nodeGroups.classed("highlight", nd => nd.cluster === c);
-    })
-    .on("mouseout", function() {
-      nodeGroups.classed("highlight", false);
-    });
+        const prev = shelfWeights.get(shelf) ?? 0;
+        shelfWeights.set(shelf, prev + w);
+      });
 
-  // --------- continuous animation ----------
-  const amplitude = 1;        // wobble radius in pixels
-  const speed = 0.0015;       // wobble speed
+      if (shelfWeights.size === 0) {
+        resetShelfCentroid();
+        return;
+      }
 
-  d3.timer(elapsed => {
-    data.forEach(d => {
-      const a = elapsed * speed + d.phase;
-      d.xAnim = d.x0 + Math.sin(a) * amplitude;
-      d.yAnim = d.y0 + Math.cos(a) * amplitude;
-    });
+      selectedShelves = new Set(shelfWeights.keys());
+      updateShelfRects();
 
-    nodeGroups.attr("transform", d => `translate(${d.xAnim},${d.yAnim})`);
+      let sumW = 0;
+      let sumX = 0;
+      let sumY = 0;
+      shelfAxisData = [];
 
-    lines
-      .attr("x1", d => d.source.xAnim)
-      .attr("y1", d => d.source.yAnim)
-      .attr("x2", d => d.target.xAnim)
-      .attr("y2", d => d.target.yAnim);
-  });
-});
-</script>
+      shelfWeights.forEach((w, shelf_id) => {
+        const c = shelfCenters.get(shelf_id);
+        sumW += w;
+        sumX += w * c.x;
+        sumY += w * c.y;
+        shelfAxisData.push({
+          shelf_id,
+          x: c.x,
+          y: c.y,
+          weight: w,
+        });
+      });
+
+      if (sumW === 0) {
+        resetShelfCentroid();
+        return;
+      }
+
+      const newTarget = {
+        x: sumX / sumW,
+        y: sumY / sumW,
+      };
+
+      if (!heatCentroid) {
+        heatCentroid = { ...newTarget };
+      }
+      heatCentroidTarget = newTarget;
+
+      heatCentroidGroup
+        .style("display", "block")
+        .attr("transform", `translate(${heatCentroid.x},${heatCentroid.y})`);
+
+      if (heatCentroidLabel) {
+        heatCentroidLabel
+          .style("display", "block")
+          .text(queryText)
+          .attr("x", heatCentroid.x + 14)
+          .attr("y", heatCentroid.y - 14);
+      }
+
+      // dynamic Voronoi for selected shelves
+      const heatmapGNode = d3.select(".heatmap-layer").node();
+      if (heatmapGNode) {
+        const voronoiPoints = heatmapGNode.__voronoiPoints__;
+        const widthLocal = heatmapGNode.__widthLocal__;
+        const heightLocal = heatmapGNode.__heightLocal__;
+        drawShelfVoronoi(voronoiPoints, widthLocal, heightLocal);
+
+        const cellWidth = heatmapGNode.__cellWidth__;
+        const cellHeight = heatmapGNode.__cellHeight__;
+        const nCols = heatmapGNode.__nCols__;
+        const nRows = heatmapGNode.__nRows__;
+        updateGridHighlight(cellWidth, cellHeight, nCols, nRows);
+      }
+
+      startHeatAnimation();
+    }
+
+    function startHeatAnimation() {
+      if (heatAnimating) return;
+      heatAnimating = true;
+
+      function step() {
+        if (!heatAnimating) return;
+        if (!heatCentroid || !heatCentroidTarget || !heatAxesLayer) {
+          heatAnimating = false;
+          return;
+        }
+
+        const a = CONFIG.centroidSmoothing;
+        heatCentroid.x += (heatCentroidTarget.x - heatCentroid.x) * a;
+        heatCentroid.y += (heatCentroidTarget.y - heatCentroid.y) * a;
+
+        heatCentroidGroup
+          .attr("transform", `translate(${heatCentroid.x},${heatCentroid.y})`);
+
+        if (heatCentroidLabel) {
+          heatCentroidLabel
+            .attr("x", heatCentroid.x + 14)
+            .attr("y", heatCentroid.y - 14);
+        }
+
+        drawShelfAxes();
+
+        // Grid cell stays locked to target, not eased
+        const heatmapGNode = d3.select(".heatmap-layer").node();
+        if (heatmapGNode) {
+          const cellWidth = heatmapGNode.__cellWidth__;
+          const cellHeight = heatmapGNode.__cellHeight__;
+          const nCols = heatmapGNode.__nCols__;
+          const nRows = heatmapGNode.__nRows__;
+          updateGridHighlight(cellWidth, cellHeight, nCols, nRows);
+        }
+
+        requestAnimationFrame(step);
+      }
+
+      requestAnimationFrame(step);
+    }
+
+    function drawShelfAxes() {
+      if (!heatCentroid || !shelfAxisData.length || !heatAxesLayer) {
+        heatAxesLayer.selectAll("g.shelf-axis").remove();
+        return;
+      }
+
+      const axes = heatAxesLayer.selectAll("g.shelf-axis")
+        .data(shelfAxisData, d => d.shelf_id);
+
+      axes.exit().remove();
+
+      const axesEnter = axes.enter()
+        .append("g")
+        .attr("class", "shelf-axis");
+
+      const axesMerged = axesEnter.merge(axes);
+
+      axesMerged.each(function(d) {
+        const cx = heatCentroid.x;
+        const cy = heatCentroid.y;
+        const dx = d.x - cx;
+        const dy = d.y - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist <= 0) {
+          d3.select(this).style("display", "none");
+          return;
+        }
+
+        const angleRad = Math.atan2(dy, dx);
+        const angleDeg = angleRad * 180 / Math.PI;
+
+        const scale = d3.scaleLinear()
+          .domain([0, dist])
+          .range([0, dist]);
+
+        const axis = d3.axisBottom(scale)
+          .ticks(3)
+          .tickFormat(v => (v === 0 ? "" : v.toFixed(1)));
+
+        const g = d3.select(this)
+          .attr("transform", `translate(${cx},${cy}) rotate(${angleDeg})`)
+          .call(axis);
+
+        g.selectAll(".tick text")
+          .style("opacity", t => t === 0 ? 0 : 1)
+          .style("font-family", "'Ubuntu Mono', monospace");
+
+        g.selectAll(".tick line")
+          .style("opacity", t => t === 0 ? 0 : 1);
+      });
+    }
+
+    // Initial render: just search, empty slots
+    renderResults([]);
+  </script>
 </body>
+</html>

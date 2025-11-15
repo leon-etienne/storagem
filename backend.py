@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import os
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 from transformers import CLIPModel, CLIPProcessor
 import faiss
+
 from sklearn.manifold import TSNE
 
 from fastapi import FastAPI, Query
@@ -20,20 +21,20 @@ from pydantic import BaseModel
 # Config
 # ----------------------------
 MODEL_NAME = "openai/clip-vit-base-patch32"
-CSV_PATH = "artworks_with_thumbnails_final_with_thumbs.csv"   # CSV that contains full + thumb paths
-
-FULL_IMAGE_COLUMN = "thumbnail"        # full-size image paths
-THUMB_COLUMN = "thumb_small"           # small thumbnails for the map
+CSV_PATH = "artworks_with_thumbnails_ting.csv"
 
 ID_COLUMN = "id"
 TITLE_COLUMN = "title"
-ARTIST_COLUMN = "artist"
+ARTIST_COLUMN = "artist"          # change if your CSV uses another name
+IMAGE_COLUMN = "image"            # full-size image for the right panel
+THUMB_COLUMN = "thumbnail"        # small thumb for the scatter map
+SHELF_COLUMN = "shelfNo"          # <-- your shelf column
 
-TEXT_WEIGHT = 0.7            # balance image vs text in embedding
+TEXT_WEIGHT = 0.7                 # balance image vs text in embedding
 TOP_K_DEFAULT = 15
 
-# KNN graph settings (for /api/graph if you ever want it)
-K_GRAPH = 8                  # neighbors per node for the graph
+TSNE_PERPLEXITY = 30
+TSNE_N_ITER = 1000
 
 
 # ----------------------------
@@ -51,10 +52,7 @@ def normalize_id(x):
 
 
 def build_metadata_text(row: pd.Series) -> str:
-    """
-    Text that will be embedded for each artwork.
-    Currently: only title (you can change this if you like).
-    """
+    """Text that will be embedded for each artwork (currently: title only)."""
     title = row.get(TITLE_COLUMN, "")
     if pd.isna(title) or not str(title).strip():
         return "Untitled artwork"
@@ -72,45 +70,66 @@ model.eval()
 
 
 # ----------------------------
-# Load CSV + images metadata
+# Load CSV + metadata
 # ----------------------------
 print(f"Loading CSV from {CSV_PATH}...")
 df = pd.read_csv(CSV_PATH)
 
-# Normalized IDs
+# Normalized ID
 if ID_COLUMN in df.columns:
     df["id_norm"] = df[ID_COLUMN].apply(normalize_id)
 else:
     df["id_norm"] = [str(i) for i in range(len(df))]
 
-# Keep rows that have at least a thumbnail
-df = df[df[THUMB_COLUMN].notna()].copy()
+# Only keep rows with a thumbnail (and optionally an image)
+if THUMB_COLUMN in df.columns:
+    df = df[df[THUMB_COLUMN].notna()].copy()
+else:
+    raise ValueError(f"CSV must contain a '{THUMB_COLUMN}' column for thumbnails.")
 
-# Ensure columns exist
-if FULL_IMAGE_COLUMN not in df.columns:
-    raise ValueError(f"CSV is missing FULL_IMAGE_COLUMN='{FULL_IMAGE_COLUMN}'")
-if THUMB_COLUMN not in df.columns:
-    raise ValueError(f"CSV is missing THUMB_COLUMN='{THUMB_COLUMN}'")
-
-df[FULL_IMAGE_COLUMN] = df[FULL_IMAGE_COLUMN].astype(str)
 df[THUMB_COLUMN] = df[THUMB_COLUMN].astype(str)
+
+# If IMAGE_COLUMN not present, fall back to thumbnail for full image as well
+if IMAGE_COLUMN in df.columns:
+    df[IMAGE_COLUMN] = df[IMAGE_COLUMN].astype(str)
+else:
+    df[IMAGE_COLUMN] = df[THUMB_COLUMN]
+
+# Artist column optional
+if ARTIST_COLUMN in df.columns:
+    df[ARTIST_COLUMN] = df[ARTIST_COLUMN].fillna("").astype(str)
+else:
+    df[ARTIST_COLUMN] = ""
+
+# Shelf column: expected to be numeric-ish
+if SHELF_COLUMN in df.columns:
+    # If there are NaNs, set them to a default shelf (e.g. 0)
+    df[SHELF_COLUMN] = df[SHELF_COLUMN].fillna(0)
+    # cast to int if possible
+    try:
+        df["shelf_id"] = df[SHELF_COLUMN].astype(int)
+    except Exception:
+        # if that fails, cast to string and later the frontend can handle mapping differently
+        df["shelf_id"] = df[SHELF_COLUMN].astype(str)
+else:
+    # default shelf id 0 if column missing
+    df["shelf_id"] = 0
 
 ids = df["id_norm"].tolist()
 titles = df[TITLE_COLUMN].fillna("").astype(str).tolist()
-
-# Artists (if missing, fill with "")
-if ARTIST_COLUMN in df.columns:
-    artists = df[ARTIST_COLUMN].fillna("").astype(str).tolist()
-else:
-    artists = [""] * len(df)
-
-full_image_paths = df[FULL_IMAGE_COLUMN].tolist()   # for embeddings + right panel
-thumb_image_paths = df[THUMB_COLUMN].tolist()       # for map thumbnails
-
+artists = df[ARTIST_COLUMN].tolist()
+image_paths = df[IMAGE_COLUMN].tolist()
+thumb_paths = df[THUMB_COLUMN].tolist()
+shelf_ids = df["shelf_id"].tolist()
 metadata_texts = [build_metadata_text(row) for _, row in df.iterrows()]
 
 num_items = len(df)
-print(f"Using {num_items} rows with images.")
+print(f"Using {num_items} rows with thumbnails.")
+
+# Optionally make paths absolute or prepend a root directory here
+# IMAGE_ROOT = "/absolute/path/to/images"
+# image_paths = [os.path.join(IMAGE_ROOT, p) for p in image_paths]
+# thumb_paths = [os.path.join(IMAGE_ROOT, p) for p in thumb_paths]
 
 
 # ----------------------------
@@ -127,11 +146,10 @@ with torch.no_grad():
         end = min(start + BATCH_SIZE, num_items)
 
         batch_images = []
-        for p in full_image_paths[start:end]:
+        for p in image_paths[start:end]:
             try:
                 img = Image.open(p).convert("RGB")
             except Exception:
-                # fallback if image missing/broken
                 img = Image.new("RGB", (224, 224), color=(0, 0, 0))
             batch_images.append(img)
 
@@ -167,7 +185,6 @@ print(f"Embedding matrix shape: {all_embs.shape}")
 # ----------------------------
 # Build FAISS index (cosine via inner product)
 # ----------------------------
-# all_embs is normalized, so inner product == cosine similarity
 faiss.normalize_L2(all_embs)
 index = faiss.IndexFlatIP(emb_dim)
 index.add(all_embs)
@@ -175,26 +192,20 @@ print(f"FAISS index built with {index.ntotal} vectors.")
 
 
 # ----------------------------
-# 2D projection (for D3) using t-SNE
+# 2D projection with t-SNE
 # ----------------------------
-print("Computing 2D projection (t-SNE)... this may take a bit.")
-
+print("Computing 2D projection (t-SNE)...")
 tsne = TSNE(
     n_components=2,
-    perplexity=40,              # tweak 20–50 depending on dataset size
-    learning_rate=200,
-    n_iter=1500,
-    n_iter_without_progress=300,
-    early_exaggeration=16.0,
-    metric="cosine",            # match CLIP's cosine space
+    perplexity=TSNE_PERPLEXITY,
+    n_iter=TSNE_N_ITER,
     init="random",
+    learning_rate="auto",
     verbose=1,
-    random_state=21,
 )
-
 coords_2d = tsne.fit_transform(all_embs)  # (N, 2)
 
-# normalize to [0,1] for plotting
+# Normalize to [0, 1] for plotting
 min_xy = coords_2d.min(axis=0)
 max_xy = coords_2d.max(axis=0)
 scale = max_xy - min_xy
@@ -203,80 +214,29 @@ coords_2d_norm = (coords_2d - min_xy) / scale
 
 
 # ----------------------------
-# Build KNN graph from embeddings (for /api/graph)
-# ----------------------------
-print(f"Building KNN graph with K={K_GRAPH} from embeddings...")
-distances_graph, indices_graph = index.search(all_embs, K_GRAPH + 1)  # self + neighbors
-
-graph_edges = []
-seen_pairs = set()
-
-for i in range(num_items):
-    for j_idx, sim in zip(indices_graph[i, 1:], distances_graph[i, 1:]):  # skip self
-        if j_idx < 0:
-            continue
-        a = i
-        b = int(j_idx)
-        if a == b:
-            continue
-        key = (min(a, b), max(a, b))
-        if key in seen_pairs:
-            continue
-        seen_pairs.add(key)
-        graph_edges.append(
-            {
-                "source": ids[a],
-                "target": ids[b],
-                "weight": float(sim),  # cosine similarity
-            }
-        )
-
-print(f"KNN graph edges: {len(graph_edges)}")
-
-
-# ----------------------------
 # API models
 # ----------------------------
 class Point(BaseModel):
     id: str
     title: str
-    artist: str
-    thumb: str   # small thumbnail for map
+    artist: Optional[str]
+    image: str
+    thumb: str
     x: float
     y: float
+    shelf_id: Optional[int]  # or str if your CSV was non-numeric
 
 
 class SearchResult(BaseModel):
     id: str
     title: str
-    artist: str
-    image: str   # full-size image
-    thumb: str   # small thumbnail (if needed)
+    artist: Optional[str]
+    image: str
     score: float
 
 
 class SearchResponse(BaseModel):
     results: List[SearchResult]
-
-
-class GraphNode(BaseModel):
-    id: str
-    title: str
-    artist: str
-    thumb: str
-    x: float
-    y: float
-
-
-class GraphEdge(BaseModel):
-    source: str
-    target: str
-    weight: float
-
-
-class GraphResponse(BaseModel):
-    nodes: List[GraphNode]
-    edges: List[GraphEdge]
 
 
 # ----------------------------
@@ -296,17 +256,32 @@ app.add_middleware(
 
 @app.get("/api/points", response_model=List[Point])
 def get_points():
-    """Return all points with 2D coordinates for visualization (thumbnails only)."""
+    """
+    Return all points with 2D coordinates for visualization.
+    Fields used by the frontend:
+      - id, title, artist, thumb, x, y, shelf_id
+      - image is also included but used mainly in search results panel.
+    """
     points_out: List[Point] = []
     for i in range(num_items):
+        shelf_raw = shelf_ids[i]
+        # if shelf_id ended up as string, you can keep it; frontend only expects a number 0..9.
+        # here we try to cast to int, else keep as is.
+        try:
+            shelf_val = int(shelf_raw)
+        except Exception:
+            shelf_val = None
+
         points_out.append(
             Point(
                 id=ids[i],
                 title=titles[i],
                 artist=artists[i],
-                thumb=thumb_image_paths[i],
+                image=image_paths[i],
+                thumb=thumb_paths[i],
                 x=float(coords_2d_norm[i, 0]),
                 y=float(coords_2d_norm[i, 1]),
+                shelf_id=shelf_val,
             )
         )
     return points_out
@@ -351,30 +326,10 @@ def search(
                 id=ids[idx],
                 title=titles[idx],
                 artist=artists[idx],
-                image=full_image_paths[idx],   # full-size
-                thumb=thumb_image_paths[idx],  # small
+                image=image_paths[idx],  # full-size for right panel
                 score=float(score),
             )
         )
 
     return SearchResponse(results=results)
-
-
-@app.get("/api/graph", response_model=GraphResponse)
-def get_graph():
-    """Return nodes + embedding-based edges for force-directed layout (optional)."""
-    nodes_out: List[GraphNode] = []
-    for i in range(num_items):
-        nodes_out.append(
-            GraphNode(
-                id=ids[i],
-                title=titles[i],
-                artist=artists[i],
-                thumb=thumb_image_paths[i],
-                x=float(coords_2d_norm[i, 0]),
-                y=float(coords_2d_norm[i, 1]),
-            )
-        )
-    edges_out = [GraphEdge(**e) for e in graph_edges]
-    return GraphResponse(nodes=nodes_out, edges=edges_out)
 # uvicorn backend:app --reload --port 8000
