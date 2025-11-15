@@ -411,8 +411,8 @@ def make_thumbnail_path(row: pd.Series) -> str:
     from pathlib import Path
     
     # Base directory for production export
-    BASE_DIR = "production-export-2025-11-13t13-42-48-005z"
-    # Construct relative path: production-export-2025-11-13t13-42-48-005z/images/
+    BASE_DIR = "production-export-2025-11-14t12-58-07-436z"
+    # Construct relative path: production-export-2025-11-14t12-58-07-436z/images/
     images_dir = Path(BASE_DIR) / "images"
     
     # Try to extract filename from thumbnail._sanityAsset
@@ -557,7 +557,7 @@ def duplicate_artworks_by_shelf(artworks: pd.DataFrame) -> pd.DataFrame:
 
 if __name__ == "__main__":
     # Path to the NDJSON data file
-    path = "production-export-2025-11-13t13-42-48-005z/data.ndjson"
+    path = "production-export-2025-11-14t12-58-07-436z/data.ndjson"
     
     # Process the file
     df = process_ndjson_file(path)
@@ -668,7 +668,7 @@ if __name__ == "__main__":
         print(f"Artworks in stock: 0")
     
     # Save to CSV
-    output_file = "artworks_with_thumbnails_leon.csv"
+    output_file = "artworks_with_thumbnails_final.csv"
     artworks.to_csv(output_file, index=False)
     print(f"\n✓ Saved to {output_file}")
 
