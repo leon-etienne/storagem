@@ -11,12 +11,20 @@ import io
 import threading
 import time
 
+# ============================================================================
+# Global State
+# ============================================================================
+
 # Shared CLIP model (loaded once, used by all tabs)
 model = None
 processor = None
 
 # Thread-local storage for per-user camera state
 thread_local = threading.local()
+
+# ============================================================================
+# Model Loading
+# ============================================================================
 
 def load_clip_model():
     """Load CLIP model - shared across all tabs"""
@@ -27,23 +35,66 @@ def load_clip_model():
     return model, processor
 
 # ============================================================================
+# Helper Functions
+# ============================================================================
+
+def parse_keywords(keywords_text):
+    """Parse comma-separated keywords into a list"""
+    if not keywords_text or not keywords_text.strip():
+        return []
+    return [k.strip() for k in keywords_text.split(",") if k.strip()]
+
+def create_plot_image(fig):
+    """Convert matplotlib figure to PIL Image"""
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+    buffer.seek(0)
+    plot_image = Image.open(buffer)
+    plt.close(fig)
+    return plot_image
+
+def create_bar_plot(keywords, probs, title="CLIP Softmax Probabilities", figsize=(10, 6)):
+    """Create a consistent bar plot for probability visualization"""
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    bars = ax.bar(keywords, probs, color='steelblue', alpha=0.7)
+    
+    # Highlight the maximum
+    max_idx = np.argmax(probs)
+    bars[max_idx].set_color('crimson')
+    bars[max_idx].set_alpha(1.0)
+    
+    # Add value labels on bars
+    for bar, prob in zip(bars, probs):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+               f'{prob:.3f}', ha='center', va='bottom', fontsize=10)
+    
+    ax.set_ylabel('Probability', fontsize=12)
+    ax.set_xlabel('Keywords', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_ylim([0, max(probs) * 1.2])
+    ax.tick_params(axis='x', rotation=45)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    
+    plt.tight_layout()
+    return create_plot_image(fig)
+
+# ============================================================================
 # TAB 1: Single Image Analysis
 # ============================================================================
 
 def analyze_image(image, keywords_text):
     """Analyze image with CLIP using comma-separated keywords"""
+    # Validation
     if image is None:
-        return gr.update(value=None), "Please upload an image"
+        return gr.update(value=None), "❌ Please upload an image"
     
-    if not keywords_text or not keywords_text.strip():
-        return gr.update(value=None), "Please enter keywords separated by commas"
+    keywords = parse_keywords(keywords_text)
+    if not keywords:
+        return gr.update(value=None), "❌ Please enter at least one keyword (comma-separated)"
     
     try:
         model, processor = load_clip_model()
-        
-        keywords = [k.strip() for k in keywords_text.split(",") if k.strip()]
-        if not keywords:
-            return gr.update(value=None), "Please provide at least one keyword"
         
         with torch.no_grad():
             inputs = processor(text=keywords, images=image, return_tensors="pt", padding=True)
@@ -53,63 +104,61 @@ def analyze_image(image, keywords_text):
         if probs.ndim == 0:
             probs = np.array([probs])
         
-        fig, ax = plt.subplots(figsize=(10, 6))
-        bars = ax.bar(keywords, probs, color='steelblue', alpha=0.7)
-        
-        max_idx = np.argmax(probs)
-        bars[max_idx].set_color('crimson')
-        bars[max_idx].set_alpha(1.0)
-        
-        for bar, prob in zip(bars, probs):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                   f'{prob:.3f}', ha='center', va='bottom', fontsize=10)
-        
-        ax.set_ylabel('Probability', fontsize=12)
-        ax.set_xlabel('Keywords', fontsize=12)
-        ax.set_title('CLIP Softmax Probabilities', fontsize=14, fontweight='bold')
-        ax.set_ylim([0, max(probs) * 1.2])
-        ax.tick_params(axis='x', rotation=45)
-        ax.grid(axis='y', alpha=0.3, linestyle='--')
-        
-        plt.tight_layout()
-        buffer = io.BytesIO()
-        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
-        buffer.seek(0)
-        plot_image = Image.open(buffer)
-        plt.close()
-        
-        return plot_image, None
+        plot_image = create_bar_plot(keywords, probs)
+        return plot_image, "✅ Analysis complete"
         
     except Exception as e:
-        return gr.update(value=None), f"Error: {str(e)}"
+        return gr.update(value=None), f"❌ Error: {str(e)}"
 
 # ============================================================================
 # TAB 2: Multiple Images Comparison
 # ============================================================================
 
+def create_thumbnail(img, size=80):
+    """Create a square thumbnail from an image"""
+    img_copy = img.copy()
+    width, height = img_copy.size
+    min_dim = min(width, height)
+    left = (width - min_dim) // 2
+    top = (height - min_dim) // 2
+    img_copy = img_copy.crop((left, top, left + min_dim, top + min_dim))
+    img_copy = img_copy.resize((size, size), Image.Resampling.LANCZOS)
+    return img_copy
+
 def compare_multiple_images(image_files, keyword):
     """Compare multiple images to a keyword using CLIP embeddings"""
+    # Validation
     if not image_files or len(image_files) == 0:
-        return gr.update(value=None), "Please upload at least one image", gr.update(value=[])
+        return (gr.update(value=None), 
+                "❌ Please upload at least one image", 
+                gr.update(value=[]))
     
     if not keyword or not keyword.strip():
-        return gr.update(value=None), "Please enter a keyword", gr.update(value=[])
+        return (gr.update(value=None), 
+                "❌ Please enter a keyword", 
+                gr.update(value=[]))
     
     try:
         model, processor = load_clip_model()
         keyword = keyword.strip()
         
+        # Load images
         images = []
         for file_path in image_files:
             try:
                 img = Image.open(file_path).convert("RGB")
                 images.append(img)
             except Exception as e:
-                return gr.update(value=None), f"Error loading image {file_path}: {str(e)}", gr.update(value=[])
+                return (gr.update(value=None), 
+                        f"❌ Error loading image {file_path}: {str(e)}", 
+                        gr.update(value=[]))
         
         if len(images) == 0:
-            return gr.update(value=None), "No valid images found", gr.update(value=[])
+            return (gr.update(value=None), 
+                    "❌ No valid images found", 
+                    gr.update(value=[]))
         
+        # Compute embeddings and similarities
         with torch.no_grad():
             text_emb = model.get_text_features(**processor(text=[keyword], return_tensors="pt", padding=True))
             text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
@@ -128,6 +177,7 @@ def compare_multiple_images(image_files, keyword):
         similarities = np.array(similarities)
         labels = [f"Image {i+1}" for i in range(len(images))]
         
+        # Sort by similarity
         sorted_indices = np.argsort(similarities)[::-1]
         sorted_similarities = similarities[sorted_indices]
         sorted_labels = [labels[i] for i in sorted_indices]
@@ -137,16 +187,7 @@ def compare_multiple_images(image_files, keyword):
         max_sim = similarities[closest_idx]
         min_sim = similarities.min()
         
-        def create_thumbnail(img, size=80):
-            img_copy = img.copy()
-            width, height = img_copy.size
-            min_dim = min(width, height)
-            left = (width - min_dim) // 2
-            top = (height - min_dim) // 2
-            img_copy = img_copy.crop((left, top, left + min_dim, top + min_dim))
-            img_copy = img_copy.resize((size, size), Image.Resampling.LANCZOS)
-            return img_copy
-        
+        # Create visualization
         thumbnails = [create_thumbnail(img) for img in images]
         
         fig = plt.figure(figsize=(max(10, len(images) * 1.5), 8))
@@ -156,6 +197,7 @@ def compare_multiple_images(image_files, keyword):
         bars[closest_idx].set_color('crimson')
         bars[closest_idx].set_alpha(1.0)
         
+        # Add thumbnails and labels
         for i, (bar, thumb) in enumerate(zip(bars, thumbnails)):
             x_pos = bar.get_x() + bar.get_width() / 2
             y_pos = min_sim - 0.15
@@ -179,12 +221,9 @@ def compare_multiple_images(image_files, keyword):
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         plt.tight_layout()
-        buffer = io.BytesIO()
-        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
-        buffer.seek(0)
-        plot_image = Image.open(buffer)
-        plt.close()
+        plot_image = create_plot_image(fig)
         
+        # Create summary text
         summary = f"Keyword: '{keyword}'\n"
         summary += f"Total images: {len(images)}\n\n"
         summary += "Ranking (highest to lowest similarity):\n"
@@ -192,13 +231,15 @@ def compare_multiple_images(image_files, keyword):
         for rank, (label, sim) in enumerate(zip(sorted_labels, sorted_similarities), 1):
             summary += f"{rank}. {label}: {sim:.4f}\n"
         summary += "\n" + "-" * 50 + "\n"
-        summary += f"Winner: {closest_image} with similarity {max_sim:.4f}"
+        summary += f"✅ Winner: {closest_image} with similarity {max_sim:.4f}"
         
         sorted_images = [images[i] for i in sorted_indices]
         return plot_image, summary, sorted_images
         
     except Exception as e:
-        return gr.update(value=None), f"Error: {str(e)}", gr.update(value=[])
+        return (gr.update(value=None), 
+                f"❌ Error: {str(e)}", 
+                gr.update(value=[]))
 
 # ============================================================================
 # TAB 3: UMAP Visualization
@@ -206,19 +247,21 @@ def compare_multiple_images(image_files, keyword):
 
 def visualize_umap(image, texts_input):
     """Create UMAP visualization of CLIP embeddings with distance information"""
+    # Validation
     if not texts_input or not texts_input.strip():
-        return gr.update(value=None), "Please enter at least one text keyword"
+        return gr.update(value=None), "❌ Please enter at least one text keyword"
     
     try:
         model, processor = load_clip_model()
         
-        texts = [t.strip() for t in texts_input.split(",") if t.strip()]
+        texts = parse_keywords(texts_input)
         if not texts:
-            return gr.update(value=None), "Please provide at least one keyword"
+            return gr.update(value=None), "❌ Please provide at least one keyword"
         
         embeddings = []
         labels = []
         
+        # Get text embeddings
         with torch.no_grad():
             text_embs = model.get_text_features(**processor(text=texts, return_tensors="pt", padding=True))
             text_embs = text_embs / text_embs.norm(dim=-1, keepdim=True)
@@ -228,6 +271,7 @@ def visualize_umap(image, texts_input):
                 embeddings.append(text_embs_np[i])
                 labels.append(f"Text: {text}")
         
+        # Get image embedding if provided
         if image is not None:
             with torch.no_grad():
                 image_emb = model.get_image_features(**processor(images=image, return_tensors="pt"))
@@ -237,16 +281,19 @@ def visualize_umap(image, texts_input):
                 labels.append("Image")
         
         if len(embeddings) < 2:
-            return gr.update(value=None), "Need at least 2 items to visualize distances"
+            return gr.update(value=None), "❌ Need at least 2 items to visualize distances"
         
         embeddings_array = np.array(embeddings)
         
+        # Create UMAP visualization
         n_neighbors = min(5, len(embeddings) - 1) if len(embeddings) > 1 else 1
         reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=n_neighbors)
         embeddings_2d = reducer.fit_transform(embeddings_array)
         
+        # Compute distances
         distances = squareform(pdist(embeddings_array, metric='cosine'))
         
+        # Create plot
         fig, ax = plt.subplots(figsize=(12, 10))
         
         colors = ['steelblue'] * len(texts) + (['crimson'] if image is not None else [])
@@ -254,9 +301,12 @@ def visualize_umap(image, texts_input):
         sizes = [100] * len(texts) + ([300] if image is not None else [])
         
         for i, (emb_2d, label, color, marker, size) in enumerate(zip(embeddings_2d, labels, colors, markers, sizes)):
-            ax.scatter(emb_2d[0], emb_2d[1], c=color, marker=marker, s=size, alpha=0.7, edgecolors='black', linewidths=1.5)
-            ax.annotate(label, (emb_2d[0], emb_2d[1]), xytext=(5, 5), textcoords='offset points', fontsize=9)
+            ax.scatter(emb_2d[0], emb_2d[1], c=color, marker=marker, s=size, alpha=0.7, 
+                      edgecolors='black', linewidths=1.5)
+            ax.annotate(label, (emb_2d[0], emb_2d[1]), xytext=(5, 5), 
+                       textcoords='offset points', fontsize=9)
         
+        # Draw distance lines
         n_items = len(embeddings)
         for i in range(n_items):
             for j in range(i + 1, n_items):
@@ -268,7 +318,8 @@ def visualize_umap(image, texts_input):
                 
                 mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2
                 ax.text(mid_x, mid_y, f'{dist:.3f}', fontsize=7, 
-                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='gray'))
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                                alpha=0.7, edgecolor='gray'))
         
         ax.set_xlabel('UMAP Component 1', fontsize=12)
         ax.set_ylabel('UMAP Component 2', fontsize=12)
@@ -277,12 +328,9 @@ def visualize_umap(image, texts_input):
         ax.grid(True, alpha=0.3, linestyle='--')
         
         plt.tight_layout()
-        buffer = io.BytesIO()
-        plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
-        buffer.seek(0)
-        plot_image = Image.open(buffer)
-        plt.close()
+        plot_image = create_plot_image(fig)
         
+        # Create distance text
         distance_text = "Pairwise Cosine Distances:\n\n"
         for i in range(n_items):
             for j in range(i + 1, n_items):
@@ -292,7 +340,7 @@ def visualize_umap(image, texts_input):
         return plot_image, distance_text
         
     except Exception as e:
-        return gr.update(value=None), f"Error: {str(e)}"
+        return gr.update(value=None), f"❌ Error: {str(e)}"
 
 # ============================================================================
 # TAB 4: Live Camera Analysis
@@ -329,32 +377,12 @@ def process_frame(frame, keywords):
         best_text = keywords[best_idx]
         best_prob = probs[best_idx]
         
+        # Annotate frame
         cv2.putText(frame, f"{best_text}: {best_prob:.3f}", (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
-        fig, ax = plt.subplots(figsize=(8, 5))
-        bars = ax.bar(keywords, probs, color='steelblue', alpha=0.7)
-        
-        bars[best_idx].set_color('crimson')
-        bars[best_idx].set_alpha(1.0)
-        
-        for bar, prob in zip(bars, probs):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                   f'{prob:.3f}', ha='center', va='bottom', fontsize=9)
-        
-        ax.set_ylabel('Probability', fontsize=11)
-        ax.set_xlabel('Keywords', fontsize=11)
-        ax.set_title('CLIP Softmax Probabilities', fontsize=12, fontweight='bold')
-        ax.set_ylim([0, max(probs) * 1.2])
-        ax.tick_params(axis='x', rotation=45)
-        ax.grid(axis='y', alpha=0.3, linestyle='--')
-        
-        plt.tight_layout()
-        buffer = io.BytesIO()
-        plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-        buffer.seek(0)
-        plot_image = Image.open(buffer)
-        plt.close()
+        # Create plot
+        plot_image = create_bar_plot(keywords, probs, figsize=(8, 5))
         
         return frame, plot_image
         
@@ -376,7 +404,7 @@ def start_live_analysis(keywords_text):
     time.sleep(0.2)  # Give time for cleanup
     
     # Parse keywords
-    keywords = [k.strip() for k in keywords_text.split(",") if k.strip()]
+    keywords = parse_keywords(keywords_text)
     if not keywords:
         keywords = ["a person", "a cat", "a dog"]
     
@@ -385,7 +413,9 @@ def start_live_analysis(keywords_text):
     try:
         user_state.video_capture = cv2.VideoCapture(0)
         if not user_state.video_capture.isOpened():
-            yield gr.update(value=None), gr.update(value=None), "Error: Could not open camera (may be in use by another session)"
+            yield (gr.update(value=None), 
+                   gr.update(value=None), 
+                   "❌ Error: Could not open camera (may be in use by another session)")
             return
         
         user_state.is_running = True
@@ -397,7 +427,9 @@ def start_live_analysis(keywords_text):
                 
             ret, frame = user_state.video_capture.read()
             if not ret:
-                yield gr.update(value=None), gr.update(value=None), "Error: Could not read frame"
+                yield (gr.update(value=None), 
+                       gr.update(value=None), 
+                       "❌ Error: Could not read frame")
                 break
             
             if not user_state.is_running:
@@ -406,7 +438,7 @@ def start_live_analysis(keywords_text):
             annotated_frame, plot_image = process_frame(frame.copy(), keywords)
             rgb_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
             
-            yield rgb_frame, plot_image, "Running"
+            yield rgb_frame, plot_image, "✅ Running"
             
             # Check flag before sleep
             if not user_state.is_running:
@@ -414,7 +446,9 @@ def start_live_analysis(keywords_text):
             time.sleep(0.2)
             
     except Exception as e:
-        yield gr.update(value=None), gr.update(value=None), f"Error: {str(e)}"
+        yield (gr.update(value=None), 
+               gr.update(value=None), 
+               f"❌ Error: {str(e)}")
     finally:
         # Ensure cleanup
         user_state.is_running = False
@@ -440,20 +474,34 @@ def stop_live_analysis():
             pass
         user_state.video_capture = None
     
-    return gr.update(value=None), gr.update(value=None), "Stopped"
+    return (gr.update(value=None), 
+            gr.update(value=None), 
+            "⏹️ Stopped")
 
 # ============================================================================
 # Create Unified Interface with Tabs
 # ============================================================================
 
-with gr.Blocks(title="CLIP Analysis Suite") as demo:
-    gr.Markdown("# CLIP Analysis Suite")
-    gr.Markdown("Unified interface for CLIP analysis. All tabs share the same model for efficient computation.")
+with gr.Blocks(title="CLIP Analysis Suite", theme=gr.themes.Soft()) as demo:
+    gr.Markdown(
+        """
+        # 🎨 CLIP Analysis Suite
+        
+        Unified interface for CLIP analysis. All tabs share the same model for efficient computation.
+        
+        ---
+        """
+    )
     
     with gr.Tabs():
         # Tab 1: Single Image Analysis
-        with gr.Tab("Single Image Analysis"):
-            gr.Markdown("Upload an image or use camera, then enter comma-separated keywords to see CLIP softmax probabilities.")
+        with gr.Tab("📊 Single Image Analysis"):
+            gr.Markdown(
+                """
+                ### Analyze a single image with CLIP
+                Upload an image or use your camera, then enter comma-separated keywords to see CLIP softmax probabilities.
+                """
+            )
             with gr.Row():
                 with gr.Column(scale=1):
                     tab1_image = gr.Image(
@@ -467,21 +515,30 @@ with gr.Blocks(title="CLIP Analysis Suite") as demo:
                         placeholder="cat, dog, bird, person",
                         lines=2
                     )
-                    tab1_btn = gr.Button("Analyze", variant="primary")
+                    tab1_btn = gr.Button("Analyze", variant="primary", size="lg")
                 
                 with gr.Column(scale=1):
                     tab1_plot = gr.Image(label="Softmax Probabilities", height=400)
-                    tab1_error = gr.Textbox(label="Status", interactive=False, visible=False)
+                    tab1_status = gr.Textbox(
+                        label="Status", 
+                        interactive=False, 
+                        value="Ready to analyze"
+                    )
             
             tab1_btn.click(
                 fn=analyze_image,
                 inputs=[tab1_image, tab1_keywords],
-                outputs=[tab1_plot, tab1_error]
+                outputs=[tab1_plot, tab1_status]
             )
         
         # Tab 2: Multiple Images Comparison
-        with gr.Tab("Multiple Images Comparison"):
-            gr.Markdown("Upload multiple images and enter a keyword to see which image is closest to the keyword.")
+        with gr.Tab("🖼️ Multiple Images Comparison"):
+            gr.Markdown(
+                """
+                ### Compare multiple images to a keyword
+                Upload multiple images and enter a keyword to see which image is closest to the keyword.
+                """
+            )
             with gr.Row():
                 with gr.Column(scale=1):
                     tab2_files = gr.File(
@@ -490,11 +547,20 @@ with gr.Blocks(title="CLIP Analysis Suite") as demo:
                         file_types=["image"],
                         height=200
                     )
-                    tab2_keyword = gr.Textbox(label="Keyword", placeholder="cat", lines=1)
-                    tab2_btn = gr.Button("Compare", variant="primary")
+                    tab2_keyword = gr.Textbox(
+                        label="Keyword", 
+                        placeholder="cat", 
+                        lines=1
+                    )
+                    tab2_btn = gr.Button("Compare", variant="primary", size="lg")
                 
                 with gr.Column(scale=1):
                     tab2_plot = gr.Image(label="Similarity Comparison", height=400)
+                    tab2_result = gr.Textbox(
+                        label="Ranking Results", 
+                        lines=10, 
+                        interactive=False
+                    )
                     tab2_gallery = gr.Gallery(
                         label="Images (ranked by similarity)",
                         show_label=True,
@@ -503,7 +569,6 @@ with gr.Blocks(title="CLIP Analysis Suite") as demo:
                         rows=2,
                         height="auto"
                     )
-                    tab2_result = gr.Textbox(label="Ranking Results", lines=10, interactive=False)
             
             tab2_btn.click(
                 fn=compare_multiple_images,
@@ -512,8 +577,13 @@ with gr.Blocks(title="CLIP Analysis Suite") as demo:
             )
         
         # Tab 3: UMAP Visualization
-        with gr.Tab("UMAP Visualization"):
-            gr.Markdown("Upload an optional image and enter comma-separated text keywords to visualize CLIP embeddings in 2D space with UMAP.")
+        with gr.Tab("🗺️ UMAP Visualization"):
+            gr.Markdown(
+                """
+                ### Visualize CLIP embeddings in 2D space
+                Upload an optional image and enter comma-separated text keywords to visualize CLIP embeddings with UMAP.
+                """
+            )
             with gr.Row():
                 with gr.Column(scale=1):
                     tab3_image = gr.Image(
@@ -527,11 +597,15 @@ with gr.Blocks(title="CLIP Analysis Suite") as demo:
                         placeholder="cat, dog, bird, person, animal",
                         lines=3
                     )
-                    tab3_btn = gr.Button("Visualize", variant="primary")
+                    tab3_btn = gr.Button("Visualize", variant="primary", size="lg")
                 
                 with gr.Column(scale=1):
                     tab3_plot = gr.Image(label="UMAP Visualization", height=500)
-                    tab3_distance = gr.Textbox(label="Distance Matrix", lines=15, interactive=False)
+                    tab3_distance = gr.Textbox(
+                        label="Distance Matrix", 
+                        lines=15, 
+                        interactive=False
+                    )
             
             tab3_btn.click(
                 fn=visualize_umap,
@@ -540,8 +614,13 @@ with gr.Blocks(title="CLIP Analysis Suite") as demo:
             )
         
         # Tab 4: Live Camera Analysis
-        with gr.Tab("Live Camera Analysis"):
-            gr.Markdown("Enter comma-separated keywords and start live camera analysis with real-time CLIP softmax probabilities.")
+        with gr.Tab("📹 Live Camera Analysis"):
+            gr.Markdown(
+                """
+                ### Real-time camera analysis
+                Enter comma-separated keywords and start live camera analysis with real-time CLIP softmax probabilities.
+                """
+            )
             with gr.Row():
                 with gr.Column(scale=1):
                     tab4_keywords = gr.Textbox(
@@ -550,8 +629,9 @@ with gr.Blocks(title="CLIP Analysis Suite") as demo:
                         lines=2,
                         value="a person, a cat, a dog, a phone, a book, a cup"
                     )
-                    tab4_start = gr.Button("Start Live Analysis", variant="primary")
-                    tab4_stop = gr.Button("Stop", variant="stop")
+                    with gr.Row():
+                        tab4_start = gr.Button("Start Live Analysis", variant="primary", size="lg")
+                        tab4_stop = gr.Button("Stop", variant="stop", size="lg")
                     tab4_status = gr.Textbox(
                         label="Status",
                         interactive=False,
@@ -577,4 +657,3 @@ with gr.Blocks(title="CLIP Analysis Suite") as demo:
 
 if __name__ == "__main__":
     demo.launch(share=True)
-
