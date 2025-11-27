@@ -33,17 +33,17 @@ def load_clip_model():
 def analyze_image(image, keywords_text):
     """Analyze image with CLIP using comma-separated keywords"""
     if image is None:
-        return None, "Please upload an image"
+        return gr.update(value=None), "Please upload an image"
     
     if not keywords_text or not keywords_text.strip():
-        return None, "Please enter keywords separated by commas"
+        return gr.update(value=None), "Please enter keywords separated by commas"
     
     try:
         model, processor = load_clip_model()
         
         keywords = [k.strip() for k in keywords_text.split(",") if k.strip()]
         if not keywords:
-            return None, "Please provide at least one keyword"
+            return gr.update(value=None), "Please provide at least one keyword"
         
         with torch.no_grad():
             inputs = processor(text=keywords, images=image, return_tensors="pt", padding=True)
@@ -81,7 +81,7 @@ def analyze_image(image, keywords_text):
         return plot_image, None
         
     except Exception as e:
-        return None, f"Error: {str(e)}"
+        return gr.update(value=None), f"Error: {str(e)}"
 
 # ============================================================================
 # TAB 2: Multiple Images Comparison
@@ -90,10 +90,10 @@ def analyze_image(image, keywords_text):
 def compare_multiple_images(image_files, keyword):
     """Compare multiple images to a keyword using CLIP embeddings"""
     if not image_files or len(image_files) == 0:
-        return None, "Please upload at least one image", []
+        return gr.update(value=None), "Please upload at least one image", gr.update(value=[])
     
     if not keyword or not keyword.strip():
-        return None, "Please enter a keyword", []
+        return gr.update(value=None), "Please enter a keyword", gr.update(value=[])
     
     try:
         model, processor = load_clip_model()
@@ -105,10 +105,10 @@ def compare_multiple_images(image_files, keyword):
                 img = Image.open(file_path).convert("RGB")
                 images.append(img)
             except Exception as e:
-                return None, f"Error loading image {file_path}: {str(e)}", []
+                return gr.update(value=None), f"Error loading image {file_path}: {str(e)}", gr.update(value=[])
         
         if len(images) == 0:
-            return None, "No valid images found", []
+            return gr.update(value=None), "No valid images found", gr.update(value=[])
         
         with torch.no_grad():
             text_emb = model.get_text_features(**processor(text=[keyword], return_tensors="pt", padding=True))
@@ -198,7 +198,7 @@ def compare_multiple_images(image_files, keyword):
         return plot_image, summary, sorted_images
         
     except Exception as e:
-        return None, f"Error: {str(e)}", []
+        return gr.update(value=None), f"Error: {str(e)}", gr.update(value=[])
 
 # ============================================================================
 # TAB 3: UMAP Visualization
@@ -207,14 +207,14 @@ def compare_multiple_images(image_files, keyword):
 def visualize_umap(image, texts_input):
     """Create UMAP visualization of CLIP embeddings with distance information"""
     if not texts_input or not texts_input.strip():
-        return None, "Please enter at least one text keyword"
+        return gr.update(value=None), "Please enter at least one text keyword"
     
     try:
         model, processor = load_clip_model()
         
         texts = [t.strip() for t in texts_input.split(",") if t.strip()]
         if not texts:
-            return None, "Please provide at least one keyword"
+            return gr.update(value=None), "Please provide at least one keyword"
         
         embeddings = []
         labels = []
@@ -237,7 +237,7 @@ def visualize_umap(image, texts_input):
                 labels.append("Image")
         
         if len(embeddings) < 2:
-            return None, "Need at least 2 items to visualize distances"
+            return gr.update(value=None), "Need at least 2 items to visualize distances"
         
         embeddings_array = np.array(embeddings)
         
@@ -292,7 +292,7 @@ def visualize_umap(image, texts_input):
         return plot_image, distance_text
         
     except Exception as e:
-        return None, f"Error: {str(e)}"
+        return gr.update(value=None), f"Error: {str(e)}"
 
 # ============================================================================
 # TAB 4: Live Camera Analysis
@@ -385,7 +385,7 @@ def start_live_analysis(keywords_text):
     try:
         user_state.video_capture = cv2.VideoCapture(0)
         if not user_state.video_capture.isOpened():
-            yield None, None, "Error: Could not open camera (may be in use by another session)"
+            yield gr.update(value=None), gr.update(value=None), "Error: Could not open camera (may be in use by another session)"
             return
         
         user_state.is_running = True
@@ -397,7 +397,7 @@ def start_live_analysis(keywords_text):
                 
             ret, frame = user_state.video_capture.read()
             if not ret:
-                yield None, None, "Error: Could not read frame"
+                yield gr.update(value=None), gr.update(value=None), "Error: Could not read frame"
                 break
             
             if not user_state.is_running:
@@ -414,7 +414,7 @@ def start_live_analysis(keywords_text):
             time.sleep(0.2)
             
     except Exception as e:
-        yield None, None, f"Error: {str(e)}"
+        yield gr.update(value=None), gr.update(value=None), f"Error: {str(e)}"
     finally:
         # Ensure cleanup
         user_state.is_running = False
@@ -440,7 +440,7 @@ def stop_live_analysis():
             pass
         user_state.video_capture = None
     
-    return None, None, "Stopped"
+    return gr.update(value=None), gr.update(value=None), "Stopped"
 
 # ============================================================================
 # Create Unified Interface with Tabs
