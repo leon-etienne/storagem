@@ -4,7 +4,8 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPProcessor, CLIPModel, AutoProcessor, Blip2ForConditionalGeneration
+from accelerate import Accelerator
 import umap
 from scipy.spatial.distance import pdist, squareform
 import io
@@ -19,7 +20,12 @@ import time
 model = None
 processor = None
 
-# Thread-local storage for per-user camera state
+# Shared BLIP-2 model for VQA (loaded once, used by all tabs)
+vqa_model = None
+vqa_processor = None
+vqa_device = None
+
+# Thread-local storage for per-user state
 thread_local = threading.local()
 
 # ============================================================================
@@ -33,6 +39,23 @@ def load_clip_model():
         model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     return model, processor
+
+def load_vqa_model():
+    """Load BLIP-2 model for VQA - shared across all tabs"""
+    global vqa_model, vqa_processor, vqa_device
+    if vqa_model is None:
+        try:
+            vqa_processor = AutoProcessor.from_pretrained("Salesforce/blip2-opt-2.7b")
+            vqa_model = Blip2ForConditionalGeneration.from_pretrained(
+                "Salesforce/blip2-opt-2.7b", 
+                torch_dtype=torch.float16
+            )
+            vqa_device = Accelerator().device
+            vqa_model.to(vqa_device)
+            vqa_model.eval()
+        except Exception as e:
+            raise RuntimeError(f"Failed to load VQA model: {str(e)}. Make sure 'accelerate' is installed: pip install accelerate")
+    return vqa_model, vqa_processor, vqa_device
 
 # ============================================================================
 # Helper Functions
@@ -347,11 +370,17 @@ def visualize_umap(image, texts_input):
 # ============================================================================
 
 def get_user_state():
-    """Get thread-local state for current user"""
+    """Get thread-local state for current user (camera)"""
     if not hasattr(thread_local, 'video_capture'):
         thread_local.video_capture = None
         thread_local.is_running = False
         thread_local.keywords = []
+    return thread_local
+
+def get_vqa_state():
+    """Get thread-local state for current user (VQA)"""
+    if not hasattr(thread_local, 'vqa_image'):
+        thread_local.vqa_image = None
     return thread_local
 
 def process_frame(frame, keywords):
@@ -477,6 +506,104 @@ def stop_live_analysis():
     return (gr.update(value=None), 
             gr.update(value=None), 
             "⏹️ Stopped")
+
+# ============================================================================
+# TAB 5: Visual Question Answering
+# ============================================================================
+
+def upload_vqa_image(image):
+    """Upload and store image for VQA in thread-local storage"""
+    vqa_state = get_vqa_state()
+    
+    if image is None:
+        vqa_state.vqa_image = None
+        return (
+            gr.update(value=None),
+            [],
+            "Please upload an image"
+        )
+    
+    # Store image in thread-local storage (each user has their own image)
+    # Make a copy to avoid issues with shared references between users
+    vqa_state.vqa_image = image.copy()
+    
+    return (
+        image,
+        [],
+        "Image uploaded successfully. You can now ask questions about it."
+    )
+
+def ask_vqa_question(question, chat_history):
+    """Ask a question about the uploaded image"""
+    vqa_state = get_vqa_state()
+    
+    # Validation
+    if vqa_state.vqa_image is None:
+        return (
+            chat_history,
+            "Please upload an image first",
+            gr.update(value="")
+        )
+    
+    if not question or not question.strip():
+        return (
+            chat_history,
+            "Please enter a question",
+            gr.update(value="")
+        )
+    
+    question = question.strip()
+    
+    try:
+        # Load model if needed
+        model, processor, device = load_vqa_model()
+        
+        # Format prompt as per BLIP-2 requirements
+        prompt = f"Question: {question} Answer:"
+        
+        # Process inputs
+        inputs = processor(
+            images=vqa_state.vqa_image, 
+            text=prompt, 
+            return_tensors="pt"
+        ).to(device, torch.float16)
+        
+        # Generate answer
+        with torch.no_grad():
+            generated_ids = model.generate(**inputs, max_new_tokens=50)
+        
+        generated_text = processor.batch_decode(
+            generated_ids, 
+            skip_special_tokens=True
+        )[0].strip()
+        
+        # Extract just the answer part (remove the prompt if present)
+        if "Answer:" in generated_text:
+            answer = generated_text.split("Answer:")[-1].strip()
+        else:
+            answer = generated_text
+        
+        # Update chat history
+        chat_history.append((question, answer))
+        
+        return (
+            chat_history,
+            "Answer generated",
+            gr.update(value="")
+        )
+        
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        chat_history.append((question, error_msg))
+        return (
+            chat_history,
+            error_msg,
+            gr.update(value="")
+        )
+
+def clear_vqa_chat():
+    """Clear the VQA chat history"""
+    return []
 
 # ============================================================================
 # Create Unified Interface with Tabs
@@ -653,6 +780,82 @@ with gr.Blocks(title="CLIP Analysis Suite", theme=gr.themes.Soft()) as demo:
                 fn=stop_live_analysis,
                 inputs=[],
                 outputs=[tab4_video, tab4_plot, tab4_status]
+            )
+        
+        # Tab 5: Visual Question Answering
+        with gr.Tab("Visual Question Answering"):
+            gr.Markdown(
+                """
+                ### Ask questions about images
+                Upload an image and ask questions about it. Each user has their own image state, so you can ask multiple questions about the same image.
+                
+                **Note:** First-time loading of the BLIP-2 model may take a few minutes.
+                """
+            )
+            with gr.Row():
+                with gr.Column(scale=1):
+                    tab5_image = gr.Image(
+                        label="Upload Image",
+                        type="pil",
+                        height=400,
+                        sources=["upload", "webcam"]
+                    )
+                    tab5_upload_btn = gr.Button("Upload Image", variant="primary", size="lg")
+                    tab5_status = gr.Textbox(
+                        label="Status",
+                        interactive=False,
+                        value="Upload an image to get started"
+                    )
+                
+                with gr.Column(scale=1):
+                    tab5_chatbot = gr.Chatbot(
+                        label="Conversation",
+                        height=500,
+                        show_label=True
+                    )
+                    with gr.Row():
+                        tab5_question = gr.Textbox(
+                            label="Ask a question",
+                            placeholder="What is in this image?",
+                            lines=2,
+                            scale=4
+                        )
+                        tab5_ask_btn = gr.Button("Ask", variant="primary", size="lg", scale=1)
+                    tab5_clear_btn = gr.Button("Clear Chat", variant="secondary", size="lg")
+            
+            # Image upload handlers
+            tab5_upload_btn.click(
+                fn=upload_vqa_image,
+                inputs=[tab5_image],
+                outputs=[tab5_image, tab5_chatbot, tab5_status]
+            )
+            
+            # Also handle direct image upload (when user uploads without clicking button)
+            tab5_image.change(
+                fn=upload_vqa_image,
+                inputs=[tab5_image],
+                outputs=[tab5_image, tab5_chatbot, tab5_status]
+            )
+            
+            # Question handler
+            tab5_ask_btn.click(
+                fn=ask_vqa_question,
+                inputs=[tab5_question, tab5_chatbot],
+                outputs=[tab5_chatbot, tab5_status, tab5_question]
+            )
+            
+            # Enter key support
+            tab5_question.submit(
+                fn=ask_vqa_question,
+                inputs=[tab5_question, tab5_chatbot],
+                outputs=[tab5_chatbot, tab5_status, tab5_question]
+            )
+            
+            # Clear chat handler
+            tab5_clear_btn.click(
+                fn=clear_vqa_chat,
+                inputs=[],
+                outputs=[tab5_chatbot]
             )
 
 if __name__ == "__main__":
